@@ -1,0 +1,126 @@
+{
+ "_doc": "1109c-final (owner 11-09 ~22:00 CST: all bugs fixed, complete version). Frozen before the final run; every rule here is in code at the shas of prereg_final.json.",
+ "a7": "member track primary (4 vs 4 samples, picture-cluster sign flip, Holm over <= stage2_cap 3 candidates); pool line logged only; tripwire null D > delta voids the round's admits; C2 binomial freeze",
+ "a8": {
+  "_doc": "Amendment 8 (coordinator decision 11-09 ~19:00 CST after full r1: +1-3 pp member effects are below single-round A7 power). Written and committed BEFORE use; effective at the r2/r3 round boundary of p1109c_full (driver stopped between rounds with gpu stop, resumed from state.json). Flags: c1109 a8, carry_cap, carry_seed. Kept OUTSIDE harness/frozen: the frozen tree's sha is the run's anchor (state anchor_sha, checked at every round's proposals), so amendment 8 is recorded here, in the run's prereg.json (a8 block) and in BUILD_STATUS; harness/frozen/prereg_1109c.json is unchanged.",
+  "carry": "a stage-2 candidate on the member track (A7) that is not admitted, with mean D > 0 and rows up > down, is carried; at most carry_cap = 4 carried at once (higher D first; beyond the cap logged, not carried). Off-scope-abstaining gate writes (pool path) are not carried. Seed: r1s11_576f71 (r1, D +.042, 19/10, p .033) and any r2 candidate that meets the same rule under A7 (r2 was judged before A8 took effect).",
+  "read": "each later round the carried candidate and its parent answer fresh draws CARRY_D0 + 2r and CARRY_D0 + 2r + 1 (CARRY_D0 = 1000; same engine seeds for both: paired; never reused), 4 vs 4 samples on this round's R rows (score minus the stage-1 draw, plus SELECT, lineage cards removed; scope rows if scoped). The read that selected it is not a bet.",
+  "eprocess": "betting e-process eproc.eprocess_rows: one bet per picture cluster per read (cluster mean paired D, clipped to [-1, 1], sorted cluster key), E = prod (1 + lambda d), lambda predictable (sum d / sum d^2 of earlier bets, clipped [0, .6], first .2). Valid under H0: no cluster's expected paired gain is positive (fresh seeds every read); Ville: P(sup E >= 1/a) <= a.",
+  "multiplicity": "e-Bonferroni over the fixed carry cap K = 4: admit iff E >= K / alpha = 80 (alpha .05). Family-wise error over the carried set <= .05 at any time (sum over <= 4 concurrent e-processes of P(sup E >= 80) <= 4 x .0125). Carried candidates are not in the round's A7 Holm family.",
+  "admit": "E >= 80 AND fixed guards on the accumulated fresh rows: no-harm (sum of harm <= sum of the parent-redraw bounds, harm_threshold per read), accumulated mean D > 0 (unseen rows; card_vs_unseen), rows up > down, critic (passed at proposal), fired-z >= 1.96 if scoped (z = sum D / sqrt(sum D^2) over accumulated rows), RRSI cost rule gain branch with dS = accumulated mean D.",
+  "drop": "D <= 0 on two consecutive reads, or 4 reads without admission, or parent gone / rebuild failed. Tripwire (A6') and the C2 freeze apply to carried admits as to any admit.",
+  "checks": "c1109deploy/a8_tests.py (CPU, 96-row cal 7 draws): N1 real null e-paths; N2 parametric null + power from the real per-row stock accuracy (16 samples per row) and real clusters, 4 reads, drop rule; numbers in result_a8.",
+  "unchanged": "A7 member track per round, Holm over <= 3 stage-2 candidates, A1/A2/A3/A5/null_ref, rows 96, all thresholds",
+  "result_a8": {
+   "N1_real_null_maxE": {
+    "stock": 1.014,
+    "r1s0_968929": 1.318,
+    "r2s11_583f9e": 1.633,
+    "r1s1_0bb69a": 1.0,
+    "stock_fresh_parent_d13d14": 1.495
+   },
+   "N1_threshold": 80,
+   "N1_pass": true,
+   "N2_rows396_admit_by_read": {
+    "0pp": [
+     0.0005,
+     0.0005,
+     0.002,
+     0.002
+    ],
+    "2pp": [
+     0.041,
+     0.145,
+     0.322,
+     0.503
+    ],
+    "3pp": [
+     0.1485,
+     0.516,
+     0.814,
+     0.944
+    ],
+    "5pp": [
+     0.615,
+     0.976,
+     0.9995,
+     1.0
+    ]
+   },
+   "N2_rows200_admit_by_read": {
+    "0pp": [
+     0.0015,
+     0.002,
+     0.0025,
+     0.0025
+    ],
+    "2pp": [
+     0.0055,
+     0.0445,
+     0.09,
+     0.1485
+    ],
+    "3pp": [
+     0.0235,
+     0.1505,
+     0.306,
+     0.464
+    ],
+    "5pp": [
+     0.188,
+     0.666,
+     0.896,
+     0.98
+    ]
+   },
+   "N2_note": "2000 lineages per cell, real per-row stock accuracy (396 rows, 384 picture clusters, mean .609), persistent fix on rows the parent mostly misses, drop rule on; size per lineage <= .0025 vs the e-Bonferroni share .0125",
+   "carry_rows": "all score + SELECT rows (396 at 96/bench), lineage cards removed; a carried candidate is not ranked on the stage-1 draw"
+  }
+ },
+ "a10": {
+  "allocator": "ts",
+  "design": "/Users/admin/selfedit/fable_1109_slot_allocator.md section 2 (exact)",
+  "families": [
+   "program",
+   "cross",
+   "patch",
+   "gate",
+   "tokens",
+   "verbosity"
+  ],
+  "params": "gamma .9, kappa0 1, a0 2, tau0 4 pp, TS cap 6 per family, floor 1 slot per available family",
+  "prior": "debiased best-cell grid zx of the round-1 grid (clip(zx_best - E[max of n N(0,1)], 0, 3)); fit-based prior of the design gives tokens >= 3 slots, zx-based gives 2.7 (replay r1-r3): reported, not tuned",
+  "reward": "stage 2: 100 x member-track D on its rows (w = rows/1600); stage 1 only: 4 x zx (w 210/1600); cost: -10 pp per unit dC above .1; A8 revises a carried proposal's record in place",
+  "replaces": "MetaLevel P A/B (no P window; window r7-8 repeats notes or skills, whichever p is nearest .10)"
+ },
+ "gate_v3": {
+  "gate_key": "prompts",
+  "gate_key_min": 20,
+  "gate_prompts": "/data/fd/mingdazhang/selfedit/rsi/mm/hb/gate_prompts_v3.jsonl",
+  "recite_min": 0.95,
+  "misfire_max": 0.01,
+  "control_rule": "per gate write, a matched control arm written in the same mm_gate job with the same keys: the note is a REAL proposed gate note of a DIFFERENT category from this run's pool of proposed notes (state c1109_gate_notes, all rounds so far incl. this round), the one closest in length to the write's own note, ties broken by a fixed seed (crc32 of the write tag), with its own category's gold answers stripped ('answer is X' clauses; whole-word gold values of 2+ chars). Fallback only if no other category's note exists: 'Count the number of distinct colors in the image before answering, then answer the question.'. (coordinator 11-09: a real off-category note matches style, length and plausibility, so a win shows the write's own content produces the gain.)",
+  "admit": "member track on the write's OWN scope rows vs parent (in the Holm family) AND vs its control on the same rows D > 0 with p <= .05 AND mean right rate above chance for every gold value on those rows (chance 1/len(options), else 1/distinct gold values); a gate write is never carried by A8"
+ },
+ "audit_fixes": [
+  "stop rule: no '3 rounds with no accepted member' stop while any A8 carry is alive",
+  "carry log lists all live carries",
+  "stage 1: zx > 0 required; fired_min = min(fired_min, ceil(scope rows / 2)) for narrow members",
+  "A1 from round 1; recite None = n/a",
+  "gate writes read on their own scope rows",
+  "op_patch keeps stock max image tokens 16384",
+  "stock answers copied, not symlinked",
+  "delta: bootstrap sd of pooled reads when fewer than 6 base reads (redraw delta logged)",
+  "one-member pool = that member's plurality answer",
+  "line_report skips cancelled asks"
+ ],
+ "a11": {
+  "when": "between r1 and r2 of p1109c_final_c (coordinator 11-10 ~02:05 CST; driver stopped with gpu stop after r1 closed, resumed from state.json)",
+  "screen": "stage-1 passers: fired >= 3 (fired_min 8 -> 3, scaled min(3, ceil(scope/2))), zx > 0 AND net > 0 on fired rows vs the members' pool; ranked by zx, cap 3. Screen only: stage 2 (A7 member track, Holm over what is read, nulls, tripwire, C2, A8) and every admission threshold unchanged. Reason: r1 had 0 passers while s9 (fired 7, net +3, zx +2.00), s6 (4, +2, +1.34), s3 (6, +3, +0.96) were narrow positive edits blocked by fired_min 8.",
+  "r1_rejudge": "r1s9_ddacd4, r1s6_790728, r1s3_93731d (r1's saved stage-1 table under the new screen, top 3 by zx) go into state c1109_rejudge and are read in r2's stage 2 with r2's Holm family (amendment-2 path: rebuilt from their stored proposals, cached rows not re-asked)",
+  "early_a7": "a candidate passing its own screen during the stage-1 wait gets its A7 paired draw asked at once as a LOW (_se) line through the same evaluate_many request as request_nulls (same member, rows, chunking, out file, line seed), so the later request waits on that same line: answers asked once, identical by construction (tests/t_a11.py); stage 1 does not wait on it",
+  "stay_max": "card code code-xf/rsi/hboost.py STAY_MAX 3600 -> 14400 s (scheduling only; stay_max_4h.sh, commit c7dab7e, applied 2026-11-10 01:58:37 CST, sha d6ed5661 -> 62e037e3)",
+  "samples": "unchanged (2 per read, zx kept); owner 11-10: headline reporting is pass@1 (per-sample mean or sample 0), majority vote logged separately, never the headline"
+ },
+ "grid_reuse": "round-1 stock grid from p1109c_grid0 (same tree, fixed ops, stock only, same rows) copied into r001 of the final run; disclosed"
+}

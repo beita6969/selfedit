@@ -15,6 +15,8 @@ ap.add_argument("--engine", default="")       # this generation's edits: applied
 ap.add_argument("--variants", default="")     # problems reworded: half 0 records join the fit, so the key is the situation and not one wording
 ap.add_argument("--read-variants", default="")  # reworded problems kept out of the fit, all halves: name<TAB>file,...
 ap.add_argument("--neg-start", default="")    # prompts where the note must not start: half 0 join the fit at the first key, half 1 are read
+ap.add_argument("--key-prompts", default="")    # gate_v3 (11-09): unlabeled in-scope prompts (pool records, no gold, no traces needed) that join the key fit as positives; the traced --plain/--cat rows still give the negatives and the unseen read check
+ap.add_argument("--group-key", default="")      # multi-key (11-09): the first note token gets one trigger unit per value of this pool field (e.g. category), each fit only on its group; continuation units shared
 ap.add_argument("--skip-units", type=int, default=0)      # rules written side by side in one generation must not take the same units
 ap.add_argument("--hard", default="")
 ap.add_argument("--hard-per", type=int, default=4)
@@ -171,6 +173,16 @@ for line in open(a.notes):
         run(plain[i], T, at)
         Xr.append(cap["x"].cpu())
         Rr.append(cap["r"].cpu())
+    assert not (a.key_prompts and a.group_key), "--key-prompts with --group-key is not built"
+    nkp = 0
+    for v in (map(json.loads, open(a.key_prompts)) if a.key_prompts else []):
+        if v.get("image_paths") and v["id"] not in plain:
+            run(v, T, at)
+            Xf.append(cap["x"].cpu())
+            Rf.append(cap["r"].cpu())
+            nkp += 1
+    if a.key_prompts:
+        say(f"key prompts joined the fit: {nkp}")
     for v in (map(json.loads, open(a.variants)) if a.variants else []):
         if half(v["id"]) == 0:
             run(v, T, at)
@@ -248,8 +260,30 @@ for line in open(a.notes):
         say(f"no-start prompts, first key, read: w.x mean {z1.mean().item():.3f}, over 0 {(z1 > 0).float().mean().item():.3f}; positives unseen mean {(Xr[:, 0].to(a.device) @ Wk[0]).mean().item():.3f}")
     zz = torch.cat([c.to(a.device).float() @ Wk.T for c in torch.cat([x for x, _ in Oth[nfo:]]).split(4096)])
     say(f"away from keys, other tasks unseen: w.x mean {zz.mean().item():.3f} sd {zz.std().item():.3f}, max {zz.max().item():.3f}; key correlation mean {torch.corrcoef(zz.T).nan_to_num().abs().fill_diagonal_(0).mean().item():.3f}")
+    # multi-key: per-group first-token keys
+    Wg, gnames = None, []
+    if a.group_key:
+        gf = [plain[i].get(a.group_key) for i in fit]
+        gr = [plain[i].get(a.group_key) for i in read]
+        gnames = sorted(set(gf))
+        wn_ = .5 / len(Xn); A0 = wn_ * Xn.T @ Xn; bn0 = -wn_ * Xn.sum(0); lam0 = a.lam * A0.diagonal().mean()
+        oth0 = torch.cat([Pos[:, j] for j in range(1, nT)])
+        Wg = []
+        for g in gnames:
+            P = Pos[torch.tensor([j for j, x in enumerate(gf) if x == g], device=a.device), 0]
+            wp, wc = .5 / len(P), .2 / len(oth0)
+            Ak = A0 + wp * P.T @ P + wc * oth0.T @ oth0 + lam0 * torch.eye(A0.shape[0], device=a.device)
+            Wg.append(torch.linalg.solve(Ak, bn0 + wp * P.sum(0) - wc * oth0.sum(0)))
+        Wg = torch.stack(Wg)
+        zr = Xr[:, 0].to(a.device).float() @ Wg.T; zf = Xf[:, 0].to(a.device).float() @ Wg.T
+        zo = torch.stack([x[0] for x, _ in Oth[nfo:]]).to(a.device).float() @ Wg.T
+        say(f"group keys ({a.group_key}): {len(gnames)} groups {dict((g, gf.count(g)) for g in gnames)}; first key over 0 on fit {(zf.max(1).values > 0).float().mean().item():.3f}, unseen {(zr.max(1).values > 0).float().mean().item():.3f} (single key {((Xr[:, 0].to(a.device).float() @ Wk[0]) > 0).float().mean().item():.3f}), other tasks {(zo.max(1).values > 0).float().mean().item():.4f}")
+        for g in gnames:
+            m_ = torch.tensor([x == g for x in gr], device=a.device)
+            if m_.any():
+                say(f"  group {g}: unseen rows {int(m_.sum())}, any group key over 0 {(zr[m_].max(1).values > 0).float().mean().item():.3f}")
     # units and read-out
-    order = importance.argsort()[a.skip_units:a.skip_units + nT].sort().values
+    order = importance.argsort()[a.skip_units:a.skip_units + nT + (len(gnames) - 1 if a.group_key else 0)].sort().values
     sig = lambda x: torch.nn.functional.silu(a.beta * (x @ Wk.T)) * (x @ Wk.T)      # [.., nT]
     UU = []
     for k in range(nT):
@@ -319,9 +353,11 @@ for line in open(a.notes):
             say(f"reworded {os.path.basename(f)} half {hf}: all-text p median {p2.median().item():.3f} mean {p2.mean().item():.3f}, first token p mean {lp2[:, 0].exp().mean().item():.3f}, least key gap {gp2.quantile(.1, 0).min().item():.2f}")
     # real forward with the true weights
     idx = order.cpu().numpy().tolist()
-    gw = (a.beta * Wk).to(G0.dtype)
-    uw = Wk.to(G0.dtype)
-    dw = Dn().to(G0.dtype)
+    WK = torch.cat([Wg, Wk[1:]]) if a.group_key else Wk           # multi-key: G first-token units (same read-out column) + shared continuation units
+    DD = torch.cat([Dn()[:, :1].repeat(1, len(gnames)), Dn()[:, 1:]], 1) if a.group_key else Dn()
+    gw = (a.beta * WK).to(G0.dtype)
+    uw = WK.to(G0.dtype)
+    dw = DD.to(G0.dtype)
     mlp.gate_proj.weight.data[order] = gw
     mlp.up_proj.weight.data[order] = uw
     mlp.down_proj.weight.data[:, order] = dw
@@ -336,5 +372,5 @@ for line in open(a.notes):
           {"op": "set", "param": f"layers.{L}.mlp.up_proj", "sel": {"neurons": idx}, "value": fmt(uw)},
           {"op": "set", "param": f"layers.{L}.mlp.down_proj", "sel": {"neurons": idx}, "value": fmt(dw)}]
     json.dump([{"label": f"gt_{tag}", "effort": "medium", "engine": en}], open(f"{a.arms}/gt_{tag}.json", "w"))
-    say(f"arm gt_{tag}: {nT} units of layer {L} repurposed; time {time.time() - t0:.0f}s")
+    say(f"arm gt_{tag}: {len(idx)} units of layer {L} repurposed; time {time.time() - t0:.0f}s")
     say("done")

@@ -31,8 +31,11 @@ Table, stacking, zx, member stats and cards keep the inheriting form. A member w
 Unseen class: a class with no FIT disagreement row has N = 0, so A = kp * overall and its table is that member's overall confusion (lines marked BACK-OFF); same for a.
 Gold read: y on sp.fit only. Rows of SELECT, half 1 and OOD enter no fit: neither gold nor answers.
 Gates that read log-linear columns stay on state_of.
+
+1109c mech cells: MECH[0] enables mechanism-level fine -> mech -> global
+back-off; MECH[0] = False keeps the frozen path byte-identical.
 """
-import dataclasses, sys, zlib
+import dataclasses, re, sys, zlib
 import numpy as np
 
 REGISTRY = {}
@@ -50,6 +53,10 @@ def register(name, reads):
 
 VOTED_LETTERS = False       # 128 prereg ds_voted_letters (coordinator 11-08): an mc row the members disagree on answers only a letter some member voted. Off: byte-identical to ae113307
 VOTED_EPS = 1e-3            # what the unvoted letters of such a row keep, shared: CE stays finite where gold was voted by nobody
+
+# 1109c mech cells: the run flips this switch; the default branch is unchanged.
+MECH = [False]
+KP_UNSEEN = 50.0
 
 
 def voted_only(F, tot, mc, agreecol, other, eps=VOTED_EPS):
@@ -232,6 +239,8 @@ def agreement(V, C):
 
 def ds_letters(V, Y, mask, mc, cells, tr, use, iters=20, kp=10.):
     """dry/cons_algos.ibcc(level="fine", vb=False, unsup=False), same equations. Y: gold on tr, -99 elsewhere. tr: rows clamped to gold. use: rows whose answers enter EM. Returns ll [N, C] from the last E step and the fitted tables."""
+    if MECH[0]:
+        return _ds_letters_mech(V, Y, mask, mc, cells, tr, use, iters=iters, kp=kp)
     M, N, _ = V.shape
     K = mask.shape[1]
     L = mask.sum(1)
@@ -294,9 +303,163 @@ def ds_letters(V, Y, mask, mc, cells, tr, use, iters=20, kp=10.):
     return ll, dict(iters=it + 1, LE=LE, LR=LR, lpi=lpi, cells=nc)
 
 
+def _ds_letters_mech(V, Y, mask, mc, cells, tr, use, iters=20, kp=10.):
+    """1109c mech cells: fine -> mechanism -> member-global tables."""
+    M, N, _ = V.shape
+    fine, mech, benches = _cell_meta(cells)
+    K = mask.shape[1]
+    L = mask.sum(1)
+    nc = int(fine.max()) + 1 if len(fine) else 0
+    nm = int(mech.max()) + 1 if len(mech) else 0
+    rows = np.union1d(np.asarray(use, int), np.asarray(tr, int)).astype(int)
+    tr = np.asarray(tr, int)
+    tot = agreement(V, K)[2] + .1
+    p = np.where(mask, tot, 0.)
+    q = np.zeros((N, K))
+    q[rows] = p[rows] / p[rows].sum(1, keepdims=True)
+    q[tr] = 0
+    q[tr, Y[tr]] = 1
+    pri = np.ones((K, K)) + np.eye(K)
+    base_r = np.array([2., 1.])
+    votes = [[[int(v) for v in V[m, i] if v >= 0] for i in range(N)] for m in range(M)]
+    seen_benches = set(benches[tr].tolist())
+    c2m, c2b = _cell_maps(fine, mech, benches, nc)          # tables are per fine cell: each fine cell backs off to its (majority) mechanism cell
+    unseen = np.array([b not in seen_benches for b in c2b], bool)
+    for it in range(iters):
+        Nf = np.zeros((M, nc, K, K)); Rf = np.zeros((M, nc, 2))
+        Nm = np.zeros((M, nm, K, K)); Rm = np.zeros((M, nm, 2))
+        pi = np.ones(K)
+        for i in rows:
+            if mc[i]:
+                pi += q[i]
+                for m in range(M):
+                    for v in votes[m][i]:
+                        Nf[m, fine[i], :, v] += q[i]
+                        Nm[m, mech[i], :, v] += q[i]
+            else:
+                for m in range(M):
+                    for v in votes[m][i]:
+                        for t in np.flatnonzero(q[i, :L[i]] > 0):
+                            Rf[m, fine[i], 0 if v == t else 1] += q[i, t]
+                            Rm[m, mech[i], 0 if v == t else 1] += q[i, t]
+        NG, RG = Nm.sum(1), Rm.sum(1)
+        A0 = NG + pri
+        AM = Nm + kp * (A0 / A0.sum(2, keepdims=True))[:, None]
+        AMP = AM / AM.sum(3, keepdims=True)
+        AF = Nf + kp * AMP[:, c2m]
+        B0 = RG + base_r
+        BM = Rm + kp * (B0 / B0.sum(1, keepdims=True))[:, None]
+        BMP = BM / BM.sum(2, keepdims=True)
+        BF = Rf + kp * BMP[:, c2m]
+        if unseen.any():
+            # Unseen benches trust the member-independent mean mech table.
+            avg_a, avg_b = AMP.mean(0), BMP.mean(0)
+            AF[:, unseen] = Nf[:, unseen] + KP_UNSEEN * avg_a[c2m[unseen]][None]
+            BF[:, unseen] = Rf[:, unseen] + KP_UNSEEN * avg_b[c2m[unseen]][None]
+        LE = np.log(AF / AF.sum(3, keepdims=True))
+        LR = np.log(BF / BF.sum(2, keepdims=True))
+        lpi = np.log(pi / pi.sum())
+        ll = np.zeros((N, K))
+        for i in range(N):
+            n = int(L[i])
+            if mc[i]:
+                ll[i, :n] = lpi[:n]
+                for m in range(M):
+                    for v in votes[m][i]:
+                        ll[i, :n] += LE[m, fine[i], :n, v]
+            else:
+                for m in range(M):
+                    for v in votes[m][i]:
+                        a = np.full(n, LR[m, fine[i], 1] - np.log(max(n - 1, 1)))
+                        a[v] = LR[m, fine[i], 0]
+                        ll[i, :n] += a
+        qn = np.zeros_like(q)
+        lr = np.where(mask[rows], ll[rows], -np.inf)
+        lr = lr - lr.max(1, keepdims=True)
+        pr = np.exp(lr)
+        qn[rows] = pr / pr.sum(1, keepdims=True)
+        qn[tr] = 0
+        qn[tr, Y[tr]] = 1
+        d = np.abs(qn - q).max()
+        q = qn
+        if d < 1e-3:
+            break
+    return ll, dict(iters=it + 1, LE=LE, LR=LR, lpi=lpi, cells=nc, mech_cells=nm)
+
+
 def tie_break(ids, C):
     """crc32(row id|column), blind to gold, as the study's tie."""
     return np.array([[zlib.crc32(f"{i}|{c}".encode()) / 2 ** 32 for c in range(C)] for i in ids]) * 1e-7
+
+
+_QTYPE = (
+    ("count", re.compile(r"\bhow many\b|\bcount\b|\bnumber of\b")),
+    ("presence", re.compile(r"^(is|are|does|do|can) |\bis there\b|\bare there\b")),
+    ("compare", re.compile(r"\b(same|differ|larger|smaller|higher|lower|more|less|which (one|of))\b")),
+    ("read", re.compile(r"\b(value|label|read|what is the (title|name))\b")),
+    ("spatial", re.compile(r"\b(left|right|above|below|behind|front|rotate|rotation|view)\b")),
+)
+
+
+def mech_cell(row):
+    """1109c mech cells use only fields present in a stored data row."""
+    prompt = str(row.get("prompt") or "").lower()
+    qtype = next((name for name, pat in _QTYPE if pat.search(prompt)), "other")
+    options = row.get("options") or []
+    n_options = len(options) if options else 0
+    n_images = len(row.get("image_paths") or [])
+    return f"{row.get('kind')}|{n_options}|{n_images}|{qtype}"
+
+
+class _CellIds(np.ndarray):
+    """Fine-cell ids carrying the mechanism id and bench for the MECH branch."""
+
+    def __new__(cls, fine, mech, benches):
+        obj = np.asarray(fine, dtype=int).view(cls)
+        obj.mech = np.asarray(mech, dtype=int)
+        obj.bench = np.asarray(benches, dtype=object)
+        obj.seen_benches = None
+        return obj
+
+    def __array_finalize__(self, parent):
+        if parent is None:
+            return
+        self.mech = getattr(parent, "mech", None)
+        self.bench = getattr(parent, "bench", None)
+        self.seen_benches = getattr(parent, "seen_benches", None)
+
+    def __getitem__(self, key):
+        out = super().__getitem__(key)
+        if isinstance(out, _CellIds):
+            if self.mech is not None:
+                out.mech = np.asarray(self.mech)[key]
+            if self.bench is not None:
+                out.bench = np.asarray(self.bench)[key]
+            out.seen_benches = getattr(self, "seen_benches", None)
+        return out
+
+
+def _cell_maps(fine, mech, benches, nc):
+    """Per fine cell: its majority mechanism cell and its bench (a fine cell is bench|category|kind, so one bench)."""
+    c2m, c2b = np.zeros(nc, int), np.full(nc, "", dtype=object)
+    for c in range(nc):
+        k = np.flatnonzero(fine == c)
+        if len(k):
+            v, n = np.unique(mech[k], return_counts=True)
+            c2m[c], c2b[c] = int(v[np.argmax(n)]), benches[k[0]]
+    return c2m, c2b
+
+
+def _cell_meta(cells):
+    """Return fine ids, mechanism ids and benches, retaining old ndarray callers."""
+    fine = np.asarray(cells, dtype=int)
+    mech = getattr(cells, "mech", None)
+    bench = getattr(cells, "bench", None)
+    if mech is None or len(mech) != len(fine):
+        mech = fine.copy()
+    if bench is None or len(bench) != len(fine):
+        bench = np.full(len(fine), "", dtype=object)
+    return fine, np.asarray(mech, dtype=int), np.asarray(bench, dtype=object)
 
 
 def fine_cells(data, ids):
@@ -304,7 +467,14 @@ def fine_cells(data, ids):
     h = _h()
     names = [f"{h.vh.key(data.rows[i])}|{data.rows[i].get('kind')}" for i in ids]
     order = {n: k for k, n in enumerate(sorted(set(names)))}
-    return np.array([order[n] for n in names], int)
+    fine = np.array([order[n] for n in names], int)
+    if not MECH[0]:
+        return fine
+    mech_names = [mech_cell(data.rows[i]) for i in ids]
+    mech_order = {n: k for k, n in enumerate(sorted(set(mech_names)))}
+    mech = np.array([mech_order[n] for n in mech_names], int)
+    benches = np.array([str(data.rows[i].get("bench") or i.split("/", 1)[0]) for i in ids], dtype=object)
+    return _CellIds(fine, mech, benches)
 
 
 def right_spellings(tab, members, votes):
@@ -326,11 +496,37 @@ def passes(agreecol, other):
 
 def agree_accuracy(right, cells, nc, kp=10.):
     """Accuracy of the agreed column per fine class, one-coin form of ds_letters. BACK-OFF: a class with no agreed FIT row takes the overall rate."""
+    if MECH[0]:
+        return _agree_accuracy_mech(right, cells, nc, kp)
     R = np.zeros((nc, 2))
     np.add.at(R, (cells, 0), right.astype(float))
     np.add.at(R, (cells, 1), (~right).astype(float))
     G = R.sum(0) + np.array([2., 1.])
     B = R + kp * G / G.sum()
+    return B[:, 0] / B.sum(1)
+
+
+def _agree_accuracy_mech(right, cells, nc, kp=10.):
+    """1109c agree-rate back-off: fine cell -> its mechanism cell -> overall; a fine cell of a bench with no EM fit row shrinks toward .5 (kp_unseen)."""
+    fine, mech, benches = _cell_meta(cells)
+    full = getattr(cells, "full", None)                    # maps from every row (cells here are the agreed FIT rows only)
+    c2m, c2b = full if full is not None else _cell_maps(fine, mech, benches, nc)
+    nm = max(int(mech.max()) + 1 if len(mech) else 0, int(c2m.max()) + 1 if len(c2m) else 0, 1)
+    right = np.asarray(right, bool)
+    Rf = np.zeros((nc, 2)); Rm = np.zeros((nm, 2))
+    np.add.at(Rf, (fine, 0), right.astype(float))
+    np.add.at(Rf, (fine, 1), (~right).astype(float))
+    np.add.at(Rm, (mech, 0), right.astype(float))
+    np.add.at(Rm, (mech, 1), (~right).astype(float))
+    G = Rm.sum(0) + np.array([2., 1.])
+    RM = Rm + kp * G / G.sum()
+    RMP = RM / RM.sum(1, keepdims=True)
+    B = Rf + kp * RMP[c2m]
+    seen = getattr(cells, "seen_benches", None)
+    if seen is not None:
+        unseen = np.array([b not in seen for b in c2b], bool)
+        if unseen.any():
+            B[unseen] = Rf[unseen] + KP_UNSEEN * np.array([.5, .5])
     return B[:, 0] / B.sum(1)
 
 
@@ -342,6 +538,13 @@ def ds_fit(V, y, mask, mc, cells, agreecol, dis, other, fit, iters=20, kp=10.):
     Y[tr] = y[tr]
     ll, tables = ds_letters(V, Y, mask, mc, cells, tr, tr, iters=iters, kp=kp)
     pr = fit[passes(agreecol, other)[fit]]
+    if MECH[0] and hasattr(cells, "seen_benches"):
+        cells.seen_benches = set(getattr(cells, "bench", np.array([], dtype=object))[tr].tolist())
+        f_, m_, b_ = _cell_meta(cells)
+        sub = cells[pr]
+        sub.seen_benches = cells.seen_benches
+        sub.full = _cell_maps(f_, m_, b_, int(cells.max()) + 1)
+        return ll, agree_accuracy(agreecol[pr] == y[pr], sub, int(cells.max()) + 1, kp), tables
     return ll, agree_accuracy(agreecol[pr] == y[pr], cells[pr], int(cells.max()) + 1, kp), tables
 
 
@@ -375,7 +578,7 @@ def _ds_agree(x):
     votes, scoped = fusion_votes(x.members, x.votes)
     V = sample_columns(tab, x.members, votes)
     agreecol, dis, tot = agreement(V, tab.C)
-    mc = np.array([x.data.rows[i].get("kind") == "mc" for i in tab.ids])
+    mc = np.array([x.data.rows[i].get("kind") == "mc" for i in tab.ids])       # 1109c: yes/no rows stay on the open path (Table columns of a yes/no row have no fixed yes/no order; Fable's fixed-column variant deferred)
     cells = fine_cells(x.data, tab.ids)
     fit, y, mask, other = np.asarray(sp.fit, int), tab.y, tab.mask, tab.other
     tie = tie_break(tab.ids, tab.C)

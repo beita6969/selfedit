@@ -41,12 +41,28 @@ COMBO_MAX, COMBO_NET = 3, 2  # plateau combination test: members added at most, 
 STAGE2_EXEMPT_MAX = 3        # coordinator 11-07: extra stage 2 slots of a plateau round, weight and vision ops the zx filter would stop
 WRITE_RUN_MAX, WRITE_QUEUE_MAX = 1500, 3600       # a gate write: 1500 s from the moment a card starts it, not from its submit (paper1 r7: two valid writes waited 15 min in the queue, landed 3 min past a submit-time deadline, lost); a write no card has started gives up after an hour in the queue
 EXEMPT_ANSWERED, EXEMPT_NOT_STOPPED = .8, .1      # the sanity floor of those slots: answered share of its stage 1 rows; too_long rate and not-stopped rate
+DS_MODES = ("ds_agree", "ds_leaf")      # 128c: ds_leaf is ds_agree for the full members plus the specialists' two-parameter leaves; every ds_agree rule reads it the same way
 GAIN_TOL = 1e-9              # |lb| and |ce| of a pool increment below this count as zero, on stacking and on ds_agree alike. Numerical, not a change of the gate
 ASK_RETRY = 4 * 3600         # a row asked this long ago with no answer goes out again: its line failed or was lost
 A = .5
 LENSES = ("target_slice", "energy_slices", "residual_table", "conf_cards", "accuracy_style", "peer_gap_cases")
 sha, canon = vh.sha, vh.canon
 Bad = vh.Bad
+# 128c (Fable 11-09 §4.1, §4.3, §4.4, §5 steps 1-2): every rule below is off unless prereg "c128" turns it on (Run.c128). Off, the code paths are A4's.
+DRAW_OFF = 7919              # draw d of a member answers with --seed (tail seed) + d * DRAW_OFF: a fresh engine seed, same genome, program and rows
+DRAW_RE = re.compile(r"/ev/d(\d+)_[^/]+$")
+BAND_DRAWS = (1, 2, 3)       # the parent's noise band: three fresh-seed re-answers, each read paired against the parent's own two samples
+NULL_DRAW, NULL_DRAW2 = 4, 5  # the null competitor: draw 4 (2 samples, stage 1) and draws 4+5 (4 samples, stage 2); independent of the band, which it could never beat (3 points: max z 1.15 < 1.65)
+PAIR_DRAW = 3                # samples 2,3 of the 4-sample stage 2: the parent's draw 3 and the candidate's own draw 3 (same seeds, so paired)
+DRAW_EPOCH = 10              # a null that passes voids the round and moves its parent's draws to the next block of DRAW_EPOCH
+C128_FIELDS = dict(          # prereg "c128": every field and its default; absent block = A4. Steps 1 (judge) and 2 (scope, fusion) of Fable 11-09 §5
+    from_round=1, judge=False, mode="replace",       # judge: 128c stage 1 + stage 2 decide; mode "and": the old verdict AND the new one (old vs new replay)
+    null=True, band_k=1.65, band_center="mean",      # null competitor per parent per round (draws 4, 4+5); band = band_k x SD over draws 1-3; "mean": thr = max(0, band mean) + delta, "zero": thr = delta
+    fired_min=8, stat="pool", s2_samples=4, z_min=1.96, stage2_max=None,      # stat "pool": per fired row 1[m right] - 1[pool right] (§4.3); "parent": paired right rate vs the parent's own samples
+    joint=True, card_unseen=True, critic=False,      # joint read for |F| < fired_min; card gain > 0 with unseen gain <= 0 rejects; leakage critic before engine time
+    refresh=None, rotate_seed=1109, read_cap=3, confirm=True,      # refresh "rotate" (option a) or "cap" (option b: read cap + two-round confirmation of wide members); None: SELECT fixed, no cap
+    scope=False, leaf=False, leaf_lambda=1.0, diversity=False, div_share=.2, div_none=1)      # step 2: program mandatory for E, abstain outside scope; ds_leaf fusion; diversity floor
+SCOPE_ON = [False]           # 128c scope rule: weight members (engine edits, gate writes) abstain outside their scope, no inherited answers
 
 
 def jload(f, default=None):
@@ -112,6 +128,34 @@ class Data:
 
     def of(self, role):
         return [i for i in self.learn if self.role[i] == role]
+
+    def bench_of(self, i):
+        return self.rows[i].get("bench") or i.split("/")[0]
+
+    def rotate(self, r, seed, n_select=None):
+        """128c split refresh (a), §4.4.4: per bench, the non-show LEARN rows (score + select, 88 on the 128 pool) are dealt again between score and select by a preregistered
+        seed schedule, a different SELECT each round. Whole pictures move together; show and ID never move. n_select: SELECT rows per bench, default the bench's preregistered count.
+        Returns {bench: (select rows, score rows)}."""
+        if not hasattr(self, "role0"):
+            self.role0 = dict(self.role)
+        out = {}
+        for b in sorted({self.bench_of(i) for i in self.learn}):
+            rows = [i for i in self.learn if self.bench_of(i) == b and self.role0[i] in ("score", "select")]
+            want = n_select if n_select is not None else sum(self.role0[i] == "select" for i in rows)
+            pics = collections.defaultdict(list)
+            for i in rows:
+                pics[str(self.cluster(i))].append(i)
+            order = sorted(pics, key=lambda c: (zlib.crc32(f"rot|{seed}|{r}|{b}|{c}".encode()), c))
+            sel = []
+            for c in order:                      # whole pictures, first fit; a picture that would overshoot waits for a smaller one
+                if len(sel) + len(pics[c]) <= want:
+                    sel += pics[c]
+            sel_ = set(sel)
+            for i in rows:
+                self.role[i] = "select" if i in sel_ else "score"
+            out[b] = (len(sel), len(rows) - len(sel))
+        assert all(self.role[i] == self.role0[i] for i in self.learn if self.role0[i] == "show"), "rotation moved a show row"
+        return out
 
 
 # ---------------------------------------------------------------- votes ------------------------------------------------------------------------
@@ -238,15 +282,33 @@ def gen_ok(f):
         mt = os.stat(f + ".gen").st_mtime
     except OSError:
         mt = None
-    k = (f, mt, canon(GEN_KEY))
+    want = draw_key(f)
+    k = (f, mt, canon(want))
     if k not in _gcache:
         st = jload(f + ".gen") if mt is not None else None
-        _gcache[k] = st is not None and all(str(st.get(x)) == v for x, v in GEN_KEY.items())
+        _gcache[k] = st is not None and all(str(st.get(x)) == v for x, v in want.items())
         if _gcache[k]:
             REFUSED.pop(f, None)
         else:
             REFUSED[f] = st
     return _gcache[k]
+
+
+def draw_key(f):
+    """The regime an answer file must carry: GEN_KEY, with a draw dir's own seed (128c)."""
+    m = DRAW_RE.search(os.path.dirname(f))
+    if not m or "seed" not in GEN_KEY:
+        return GEN_KEY
+    return dict(GEN_KEY, seed=str(int(GEN_KEY["seed"]) + int(m.group(1)) * DRAW_OFF))
+
+
+def draw_of(m, d):
+    """Member m re-answered with a fresh engine seed (128c): draw d >= 1, d 0 is m. Same genome, program and gate; its own answers in ev/d{d}_{key}, never mixed with m's.
+    A draw of a gate member is cut to its scope like the member (load_member); under SCOPE_ON it never inherits."""
+    if not d:
+        return m
+    key = m["mid"] if m.get("program") or m.get("gate") else vh.gid(m["genome"])
+    return dict(m, name=f"{m['name']}~d{d}", mid=sha(f"{m['mid']}:draw:{d}")[:14], draw=dict(of=m["name"], d=int(d), key=key), origin="draw")
 
 
 def answer_files(d):
@@ -345,6 +407,8 @@ def is_stock(g):
 
 
 def member_dirs(m):
+    if m.get("draw"):
+        return [f"{EVR}/ev/d{m['draw']['d']}_{m['draw']['key']}"]
     g = vh.gid(m["genome"])
     if m.get("program"):
         return [f"{EVR}/ev/{m['mid']}"]
@@ -369,10 +433,47 @@ def regrade(rec, row):
     return g, bool(ok), p
 
 
+def strip_gold(note, golds):
+    """gate_v3 control: the note with its own category's gold answers removed: 'answer is/: X' clauses and every whole-word occurrence of a gold value
+    of 2+ characters (single letters / digits only inside an 'answer' clause, so ordinary words survive)."""
+    t = re.sub(r"(?i)\b(the\s+)?(correct\s+|right\s+)?answer\s*(is|:|=|would be|should be)\s*\(?[^\s.,;)]+\)?", "the answer", note)
+    for g in sorted({str(x) for x in golds if x is not None and len(str(x).strip()) >= 2}, key=len, reverse=True):
+        t = re.sub(r"(?i)(?<![\w])" + re.escape(g.strip()) + r"(?![\w])", "...", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def control_note(note, cat, pool, golds, fallback, tag):
+    """gate_v3 control (coordinator 11-09, prereg 1109c-final): a real proposed gate note of a DIFFERENT category from this run's pool, the closest in
+    length to the write's own note (ties by a fixed seed from the write's tag), its own category's gold answers stripped. The fixed fallback sentence
+    only when no other category's note exists. Returns (note, source dict)."""
+    C = [x for x in pool if x.get("cat") and x["cat"] != cat and x.get("note")]
+    if not C:
+        return fallback, dict(kind="fallback")
+    C = [dict(x, stripped=strip_gold(x["note"], golds.get(x["cat"], ()))) for x in C]
+    d0 = min(abs(len(x["stripped"]) - len(note)) for x in C)
+    T = sorted([x for x in C if abs(len(x["stripped"]) - len(note)) == d0], key=lambda x: (x["cat"], x["note"]))
+    x = T[int(np.random.default_rng(zlib.crc32(f"ctrl:{tag}".encode())).integers(len(T)))]
+    return x["stripped"], dict(kind="off-category note", cat=x["cat"], name=x.get("name"), round=x.get("round"), len_own=len(note), len_ctrl=len(x["stripped"]), ties=len(T))
+
+
+TREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def gate_scope(m):
     """The category a gate member's note covers, when its other rows inherit the parent's answers; else None."""
     s = (m.get("gate") or {}).get("scope") or ""
-    return s[4:] if INHERIT and s.startswith("cat:") and not m.get("inherit_off") and m.get("parents") and m["parents"][0] in REG else None
+    return s[4:] if (INHERIT or SCOPE_ON[0]) and s.startswith("cat:") and not m.get("inherit_off") and m.get("parents") and m["parents"][0] in REG else None
+
+
+def has_engine(m):
+    """Engine edits E of a member (weight edits, directions, a gate write); vision settings (patch, tokens) are genome, not E."""
+    g = m.get("genome") or {}
+    return bool(g.get("engine") or g.get("dirs") or m.get("gate"))
+
+
+def specialist(m):
+    """128c scope rule (§4.1): a member with engine edits is a scoped specialist; it votes only inside its scope. Off: nobody is."""
+    return bool(SCOPE_ON[0]) and has_engine(m)
 
 
 def own_rows(m, ids):
@@ -400,6 +501,8 @@ def gate_leaks(m):
 def load_member(m):
     out = load_raw(m)
     c = gate_scope(m)
+    if c is not None and SCOPE_ON[0]:        # 128c: inherit_gate off for weight members; outside its scope a gate member has no record, so it abstains everywhere
+        return {i: s for i, s in out.items() if ROWKEY.get(i) == c}
     if c is not None:
         for i, s in load_member(REG[m["parents"][0]]).items():
             if ROWKEY.get(i) != c:
@@ -1118,12 +1221,17 @@ class Ev:
             return left
 
     # the ledger of every client (driver, filler, reporter, queue-ahead), one file per answer dir: a row asked and still alive is not asked again by anyone, whatever chunk it is in. Append only, cancels are lines
-    def job_tail(self):
+    def job_tail(self, seed_off=0):
         t = gen_tail(vh.TAIL.format(lib=vh.DIRLIB))
         u = getattr(self, "gpu_util", None)
-        return t.replace("--gpu-util 0.85", f"--gpu-util {u}") if u else t
+        t = t.replace("--gpu-util 0.85", f"--gpu-util {u}") if u else t
+        if seed_off:                 # 1109c fix (11-09): a draw's seed goes on its own line's --seed; the card code (code-xf) never reads an item's seed_off
+            t = re.sub(r"--seed (\d+)", lambda x: f"--seed {int(x.group(1)) + int(seed_off)}", t)
+        return t
 
     def dir_of(self, m):
+        if m.get("draw"):
+            return member_dirs(m)[0]
         return f"{EVR}/ev/{m['mid'] if m.get('program') else vh.gid(m['genome'])}"
 
     @contextlib.contextmanager
@@ -1179,7 +1287,7 @@ class Ev:
         led, mine, on, done = self.asked(d), [], {}, {}
         for i in need:
             x = led.get(i)
-            if x is not None and os.path.exists(x["out"]):       # answered after this client read its rows; it reads them again once it has waited
+            if x is not None and os.path.exists(x["out"]) and gen_ok(x["out"]):       # answered after this client read its rows; it reads them again once it has waited (a file of another regime is not an answer, 1109c fix 11-09)
                 if x["out"] not in done:
                     with open(x["out"]) as h:
                         done[x["out"]] = {json.loads(l)["id"] for l in h}
@@ -1230,12 +1338,12 @@ class Ev:
         if not ids:
             return None
         rows, abst = program_rows(self.data, m, ids)
-        tag = sha(canon(sorted(ids)) + gsfx())[:10]          # with a prereg gen the regime is in the name: a file of another regime with the same rows never stands in for this one
+        tag = sha(canon(sorted(ids)) + gsfx() + (f":seed+{m['draw']['d'] * DRAW_OFF}" if m.get("draw") else ""))[:10]          # with a prereg gen the regime is in the name: a file of another regime with the same rows never stands in for this one; a draw's own seed too (1109c fix 11-09: files a card made at the base seed are refused, and never block a re-ask)
         if abst:
             jdump(f"{EVR}/prog/{m['mid']}/abstain.{tag}.json", abst)
         if not rows:
             return None
-        d = f"{EVR}/ev/{m['mid'] if m.get('program') else vh.gid(m['genome'])}"
+        d = self.dir_of(m)
         os.makedirs(d, exist_ok=True)
         name = f"r{tag}"
         out, src = f"{d}/a.{name}.jsonl", f"{HB}/rows/{(m['mid'] if m.get('program') else 'p')}_{tag}.jsonl"
@@ -1256,7 +1364,7 @@ class Ev:
                 o.write(json.dumps(r, ensure_ascii=False) + "\n")
         settle(t, src)
         g = m["genome"]
-        return dict(kind="eval", model=self.model(g), engine=g["engine"], rows=src, out=out, n=len(rows), old=f"hb{self.tag}_{m['mid'][:8]}_{tag}", ids=[x["id"] for x in rows], **(dict(attempt=1) if tries else {}), **(dict(part=sorted(ids)) if abst else {}))
+        return dict(kind="eval", model=self.model(g), engine=g["engine"], rows=src, out=out, n=len(rows), old=f"hb{self.tag}_{m['mid'][:8]}_{tag}", ids=[x["id"] for x in rows], **(dict(attempt=1) if tries else {}), **(dict(part=sorted(ids)) if abst else {}), **(dict(seed_off=m["draw"]["d"] * DRAW_OFF) if m.get("draw") else {}))
 
     def evaluate_many(self, reqs, cards=14, chunk=None):
         """One engine per checkpoint: members on one checkpoint share a job, as far as an even share of the cards allows; long lists are cut so idle cards can take them."""
@@ -1314,8 +1422,8 @@ class Ev:
         per = max(min(sum(i["n"] for i in todo) / cards, getattr(self, "batch_cap", 1e9)), max(i["n"] for i in todo))
         groups = collections.defaultdict(list)
         for it in todo:
-            groups[it["model"]].append(it)
-        for model, its in groups.items():
+            groups[it["model"], int(it.get("seed_off") or 0)].append(it)
+        for (model, soff), its in groups.items():
             cur, n, jobs = [], 0, []
             for it in its:
                 if cur and n + it["n"] > per:
@@ -1325,7 +1433,7 @@ class Ev:
                 n += it["n"]
             jobs.append(cur)
             for b in jobs:
-                if model == vh.STOCK and self.worker_idle():
+                if model == vh.STOCK and not soff and self.worker_idle():
                     self.to_worker(b)
                 else:
                     self.batch_job(model, b)
@@ -1355,7 +1463,7 @@ class Ev:
                             continue
                         name = f"hb{self.tag}_s{sha(it['out'] + ('again' if it.get('attempt') else ''))[:12]}"
                         jdump(f"{HB}/jobs/{name}.json", [it])
-                        self.q.submit(name, f"python -u rsi/hboost.py job-batch {HB}/jobs/{name}.json {name} --samples 2 --model {it['model']} --pool {IID} " + self.job_tail())
+                        self.q.submit(name, f"python -u rsi/hboost.py job-batch {HB}/jobs/{name}.json {name} --samples 2 --model {it['model']} --pool {IID} " + self.job_tail(int(it.get("seed_off") or 0)))
                         self.note(d, dict(rows=it["ids"], out=it["out"], name=name, low=True))
                     self.fills.append(dict(name=name, mid=m["mid"], out=it["out"], ids=it["ids"], d=d))
         finally:
@@ -1376,10 +1484,12 @@ class Ev:
         return running
 
     def batch_job(self, model, its):
-        name = f"hb{self.tag}_{'gb' if getattr(self, 'prio', False) else 'b'}{sha(canon([i['out'] for i in its] + ['again'] * any(i.get('attempt') for i in its)))[:12]}"      # gb: gate work, ahead of plain lines on Vesta
+        name = f"hb{self.tag}_{'se' if getattr(self, 'early', False) else 'gb' if getattr(self, 'prio', False) else 'b'}{sha(canon([i['out'] for i in its] + ['again'] * any(i.get('attempt') for i in its)))[:12]}"      # gb: gate work, ahead of plain lines on Vesta
         f = f"{HB}/jobs/{name}.json"
         jdump(f, its)
-        self.q.submit(name, f"python -u rsi/hboost.py job-batch {f} {name} --samples 2 --model {model} --pool {IID} " + self.job_tail())
+        offs = {int(i.get("seed_off") or 0) for i in its}
+        assert len(offs) == 1, f"one seed per line: {offs}"
+        self.q.submit(name, f"python -u rsi/hboost.py job-batch {f} {name} --samples 2 --model {model} --pool {IID} " + self.job_tail(offs.pop()))
         self.jobs.append(name)
         for it in its:
             jdump(it["out"] + ".job", dict(name=name))
@@ -1511,6 +1621,8 @@ def run_item(S, L, a, it):
         probs = [json.loads(l) for l in open(it["rows"])]
         a.__dict__.setdefault("effort0", a.effort)        # the tail's effort (vharness: medium); before 11-08 set to medium here whatever the tail said
         a.effort = it.get("effort") or a.effort0
+        a.__dict__.setdefault("seed0", a.seed)            # 128c: a draw answers with its own seed (crn_seeds reads args.seed per call); every other item with the tail's
+        a.seed = a.seed0 + int(it.get("seed_off") or 0)
         if it.get("engine"):
             h = S.apply(it["engine"])
         L.mm_eval.PARTIAL = out + ".partial"
@@ -1854,8 +1966,17 @@ def changes_network(m):
     return bool(g.get("vision") or g.get("engine") or m.get("note"))
 
 
-def split_ops(split, best, slots, rng, cap, can_cross, hist=None):
-    """Fixed split of the slots by kind; grid slots in proportion to the operators' fit, under the cap. Until the pool has a weight member and a program member, or two weight members, nothing real can be crossed: those slots go half to gates, half to programs."""
+def write_counts(write_rows, n_done, recites):
+    """A1 labels of a round's gate writes. wr = (writes that passed finish_gate, writes, drops for not reaching unseen problems); rc = (recited >= .5, recites measured, their median, recited < .5, n/a: no sample of the key asked)."""
+    wr = (n_done, len(write_rows), sum(1 for row in write_rows if "did not reach" in str(row.get("status"))))
+    got = [x for x in recites if x is not None]
+    rc = (sum(1 for x in got if x >= .5), len(got), float(np.median(got)) if got else None, sum(1 for x in got if x < .5), sum(1 for x in recites if x is None))
+    return wr, rc
+
+
+def split_ops(split, best, slots, rng, cap, can_cross, hist=None, gate_cap=None):
+    """Fixed split of the slots by kind; grid slots in proportion to the operators' fit, under the cap. Until the pool has a weight member and a program member, or two weight members, nothing real can be crossed: those slots go half to gates, half to programs.
+    gate_cap (amendment A1): at most this many gate slots; the slots it frees join the grid slots, which grid_slots assigns by fit under the cap as always."""
     gate, cro, prog, grid = split["gate"], split["cross"], split["program"], split["grid"]
     weak = 0
     if not can_cross:
@@ -1863,6 +1984,12 @@ def split_ops(split, best, slots, rng, cap, can_cross, hist=None):
             weak, cro = cro, 0
         else:
             gate, prog, cro = gate + cro // 2, prog + cro - cro // 2, 0
+    if gate_cap is not None and gate > gate_cap:
+        if best:
+            grid += gate - gate_cap
+        else:
+            prog += gate - gate_cap      # no grid this round: the freed slots stay with the proposer, as programs
+        gate = gate_cap
     n = grid_slots(best, grid, cap) if best else {}
     plan = ["gate"] * gate + ["cross"] * cro + ["program"] * prog + [o for o in sorted(best) for _ in range(n.get(o, 0))]
     for _ in range(weak):
@@ -1916,8 +2043,13 @@ A member that is merely good but makes the same mistakes as the others adds noth
 Think about what makes this model fail on the questions shown, then make the change that addresses that cause. Be specific and honest about what you can change."""
 
 
+MENU_OPS = [None]            # 1109c (fable_1109d patch 4): the operators the proposer may use; None = every menu line (code-128c)
+
+
 def menu():
     lines = [l for l in vh.MENU.splitlines() if l.startswith("- ")]
+    if MENU_OPS[0] is not None:
+        lines = [l for l in lines if l[2:].split(":", 1)[0].strip() in MENU_OPS[0]]
     return "\n".join(lines).replace("NAMES", ", ".join(vh.DIRECTIONS)).replace("VERB", ", ".join(vh.VERBOSE))
 
 
@@ -1931,7 +2063,7 @@ def tail(parents, cats, noweights=False):
         s += "\n\nThe copies' networks are fixed: you change only the harness program around them.\n\n" + API
         return s + ('\n\n## Your answer\nReason first, then ONE ```json block: {"why": "the cause you found, and which errors of the pool this member fixes", "parents": ["name"], "program": "source of harness(row)"}. A new program is required. Do not repeat what the parents already have.')
     s += "\n\n## Edits you can make to a copy's network, without training\n" + menu()
-    s += "\nA gate edit stands alone in a proposal, with \"scope\": \"cat:<category>\", category from: " + "; ".join(cats[:GATE_CATS]) + ".\n"
+    s += ("\nA gate edit stands alone in a proposal, with \"scope\": \"cat:<category>\", category from: " + "; ".join(cats[:GATE_CATS]) + ".\n") if cats else "\nNo category is open to a gate edit this round: make another edit.\n"
     s += "If a parent carries a gate note, rows of that note's category go to the engine as the plain prompt: your program runs on all other rows.\n\n" + API
     s += ('\n\n## Your answer\nReason first, then ONE ```json block: {"why": "the cause you found, and which errors of the pool this member fixes", "parents": ["name"] (two names to cross them: edits of both, then yours), '
           '"edits": [at most 3 edits, each with its "op" field, e.g. {"op": "patch", "patch": 8, "kernel": "box"}, or []], "program": "source of harness(row), or null to keep the parent\'s"}. At least one change is required. Do not repeat what the parents already have.')
@@ -1976,6 +2108,165 @@ def parse_answer(text):
 
 
 # ---------------------------------------------------------------- the loop ------------------------------------------------------------------------
+
+# ---------------------------------------------------------------- 128c judge: pure functions (c128deploy/t_c128.py tests each) ------------------------------
+def merge4(a, b):
+    """Votes with samples 0,1 of a and samples 0,1 of b as samples 2,3: a 4-sample read from two 2-sample answer sets with different seeds. A row only b has keeps b's two."""
+    out = {i: dict(s) for i, s in a.items()}
+    for i, s in b.items():
+        o = out.setdefault(i, {})
+        for k, v in (s or {}).items():
+            if int(k) <= 1:
+                o[2 + int(k)] = v
+    return out
+
+
+def maj_col(tab, k, s, need=1):
+    """Plurality column of samples s (sample -> vote) on Table row k, as Table.module's pred: OTHER and unparsed samples do not count, ties go to the lower column. -1 if no sample counts or the top count is below need."""
+    cols = [tab.column(k, v) for v in (s or {}).values() if v is not None]
+    cols = [c for c in cols if c is not None and not (tab.other[k] >= 0 and c == tab.other[k])]
+    if not cols:
+        return -1
+    cnt = np.bincount(cols, minlength=len(tab.letters[k]))
+    c = int(np.argmax(cnt))
+    return c if cnt[c] >= need else -1
+
+
+def answer_of(tab, F):
+    """Column answered on every Table row, as Table.acc reads F; -1 for no answer."""
+    F = np.where(tab.mask, F, -np.inf).copy()
+    r = np.arange(len(tab.ids))
+    ot = tab.other >= 0
+    F[r[ot], tab.other[ot]] = -np.inf
+    return np.where(getattr(tab, "novote", np.zeros(len(tab.ids), bool)) | ~np.isfinite(F.max(1)), -1, F.argmax(1))
+
+
+def pool_cols(fu):
+    """The pool's answer per Table row; on FIT rows the answer held out by picture (F_oof), so a FIT row's pool answer has not seen its own gold."""
+    a = answer_of(fu.tab, fu.F)
+    fit = np.asarray(fu.sp.fit, int)
+    if getattr(fu, "F_oof", None) is not None and len(fit):
+        G = np.array(fu.F, float, copy=True)
+        G[fit] = fu.F_oof
+        a[fit] = answer_of(fu.tab, G)[fit]
+    return a
+
+
+def right_rate(s):
+    """Share of right samples among the samples present (a NO_RUN or unparsed sample is wrong, as everywhere); None if none."""
+    xs = [bool(v["ok"]) for v in (s or {}).values() if v is not None]
+    return float(np.mean(xs)) if xs else None
+
+
+def paired(vc, vp, ids):
+    """Per row of ids: right rate of vc's samples minus vp's. Rows where either has no sample (abstained, not run) are left out."""
+    out = {}
+    for i in ids:
+        a, b = right_rate(vc.get(i)), right_rate(vp.get(i))
+        if a is not None and b is not None:
+            out[i] = a - b
+    return out
+
+
+def fired_rows(tab, mv, pa, ids, need=1):
+    """F_m(R), §4.1: rows of ids in m's scope (it answered) where m's plurality answer differs from the pool's answer without m. pa: pool column per Table row."""
+    out = []
+    for i in ids:
+        k = tab.index.get(i)
+        if k is None or not mv.get(i):
+            continue
+        c = maj_col(tab, k, mv[i], need)
+        if c >= 0 and c != pa[k]:
+            out.append(i)
+    return out
+
+
+def vs_pool(tab, mv, pa, ids):
+    """§4.3 net rows on a fired set, per row: 1[m's plurality answer is gold] - 1[the pool's answer is gold]. Summed over F it is |F| (q_m - q_a)."""
+    out = {}
+    for i in ids:
+        k = tab.index[i]
+        c = maj_col(tab, k, mv.get(i))
+        out[i] = float(c >= 0 and c == tab.y[k]) - float(pa[k] >= 0 and pa[k] == tab.y[k])
+    return out
+
+
+def band_of(xs, k=1.65):
+    """RRSI noise band of a statistic over fresh-seed re-answers of the parent: mean, SD (ddof 1) and delta = k SD. Needs two values or more."""
+    x = np.asarray([v for v in xs if v is not None], float)
+    if len(x) < 2:
+        return dict(values=[float(v) for v in x], mean=None, sd=None, delta=None)
+    sd = float(x.std(ddof=1))
+    return dict(values=[float(v) for v in x], mean=float(x.mean()), sd=sd, delta=float(k * sd))
+
+
+def hb_z(d):
+    """HarnessBank significance on per-row paired differences: z = mean / (SD / sqrt(n)). SD 0: +-inf by the sign of the mean, 0 if the mean is 0."""
+    x = np.asarray(list(d), float)
+    n = len(x)
+    if n == 0:
+        return dict(n=0, mean=None, sd=None, z=None)
+    mu = float(x.mean())
+    sd = float(x.std(ddof=1)) if n > 1 else 0.
+    z = mu / (sd / np.sqrt(n)) if sd > 0 else (float("inf") if mu > 0 else float("-inf") if mu < 0 else 0.)
+    return dict(n=n, mean=mu, sd=sd, z=float(z))
+
+
+def harm(d):
+    """DarwinX no-harm statistic R = sum over rows of (-delta)+, in rows."""
+    return float(sum(max(-v, 0.) for v in d.values()))
+
+
+def diversity(tab, vc, vp, scope_ids, member_votes):
+    """§4.3 diversity floor inputs: share of in-scope rows (both answered) where the candidate's plurality differs from its parent's; and, on in-scope rows where no member has a right sample
+    ("none anywhere" among the members), how many the candidate has a right sample on."""
+    both = [i for i in scope_ids if i in tab.index and maj_col(tab, tab.index[i], vc.get(i)) >= 0 and maj_col(tab, tab.index[i], vp.get(i)) >= 0]
+    diff = sum(maj_col(tab, tab.index[i], vc.get(i)) != maj_col(tab, tab.index[i], vp.get(i)) for i in both)
+    none = [i for i in scope_ids if not any(v is not None and v.get("ok") for mv in member_votes for v in (mv.get(i) or {}).values())]
+    right = [i for i in none if any(v is not None and v.get("ok") for v in (vc.get(i) or {}).values())]
+    return dict(rows=len(both), differ=int(diff), share=(diff / len(both)) if both else 0., none_anywhere=len(none), right_on_none=len(right), right_on_none_ids=right[:20])
+
+
+CRITIC_SYSTEM = "You review proposed changes to the harness of a vision-language model before they are run. You judge one thing only: whether the change leaks answers."
+CRITIC_ASK = ("Below is one proposed change: edits to the model, a note to be written into it, and/or a harness program that rewrites the question or the image. "
+              "Does it encode a specific answer, count, option letter, value or row of particular questions (something that is right only for questions its author has seen), rather than a general procedure? "
+              "Reply on the first line with exactly \"LEAK: yes\" or \"LEAK: no\", then one sentence naming the encoded item if there is one.")
+
+
+def edit_summary(e):
+    """One engine edit for the critic: every field except numeric vectors, which are shown as their length and norm (a 5120-float direction made the
+    11-09 dry run's critic prompt 46001 tokens > 46000; numbers in a direction carry no answer text)."""
+    out = {}
+    for k, v in e.items():
+        if isinstance(v, (list, tuple)) and len(v) > 8 and all(isinstance(x, (int, float)) for x in np.ravel(np.array(v, dtype=object))):
+            a = np.array(v, dtype=float)
+            out[k] = f"<vector {list(a.shape)} norm {float(np.linalg.norm(a)):.3g}>"
+        else:
+            out[k] = v
+    return out
+
+
+def critic_text(m):
+    """What the leakage critic is shown: the change itself, not its parent's; engine edits as field summaries (edit_summary), capped at 4000 chars."""
+    g = m["genome"]
+    eng = canon([edit_summary(e) for e in g.get("engine")]) if g.get("engine") else "none"
+    out = [f"Operators: {', '.join(m.get('own_ops') or m.get('ops') or []) or 'none'}", f"Vision setting: {canon(g.get('vision')) if g.get('vision') else 'stock'}",
+           "Engine edits: " + (eng if len(eng) <= 4000 else eng[:4000] + f" ... ({len(eng)} chars)")]
+    if (m.get("gate") or {}).get("note"):
+        out.append(f"Note to be written (scope {m['gate'].get('scope')}): {m['gate']['note']}")
+    if m.get("program"):
+        out.append("Program:\n```python\n" + str(m["program"])[:6000] + "\n```")
+    if m.get("why"):
+        out.append(f"Author's reason: {str(m['why'])[:600]}")
+    return "\n".join(out)
+
+
+def critic_verdict(text):
+    """'yes', 'no' or None from the critic's first LEAK: line."""
+    x = re.search(r"LEAK:\s*(yes|no)\b", str(text or ""), re.I)
+    return x.group(1).lower() if x else None
+
+
 class Run:
     def __init__(self, work):
         self.work = work
@@ -2001,6 +2292,31 @@ class Run:
         if self.plateau_on and self.fusion != "ds_agree":
             raise SystemExit("prereg plateau reads the ds_agree pool: set fusion ds_agree")
         self.fz_t = {}
+        self.c128_init()
+        self.c9 = None
+        if (self.a or {}).get("c1109"):           # 1109c evolving harness (harness/adapters/hw_round.py); absent block = code-128c unchanged
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from harness.adapters import hw_round as HW
+            self.HW = HW
+            HW.init(self, sys.modules[__name__])
+
+    def c128_init(self):
+        """prereg c128 switches that hold for the whole run (scope and leaf change what a vote is, so they are not per round): SCOPE_ON, and fusion ds_leaf on top of ds_agree."""
+        c = (self.a or {}).get("c128") or {}
+        bad = sorted(set(c) - set(C128_FIELDS) - {"note"})
+        if bad:
+            raise SystemExit(f"prereg c128: unknown fields {bad}; known {sorted(C128_FIELDS)}")
+        SCOPE_ON[0] = bool(c.get("scope"))
+        if c.get("judge") and self.fusion not in DS_MODES:
+            raise SystemExit("prereg c128 judge reads the fused pool: set fusion ds_agree")
+        if c.get("leaf"):
+            if not c.get("scope"):
+                raise SystemExit("prereg c128 leaf needs scope: the specialists are the scoped weight members")
+            if self.fusion != "ds_agree":
+                raise SystemExit("prereg c128 leaf sits on ds_agree: set fusion ds_agree")
+            import fus_leaf
+            fus_leaf.LAMBDA = float(c.get("leaf_lambda", fus_leaf.LAMBDA))
+            self.fusion = "ds_leaf"
 
     def stage(self, r, name):
         """Stage marks and, once a minute, cards free on Vesta: dry/idle_table.py joins them with the node's log for idle card-minutes per stage."""
@@ -2063,7 +2379,8 @@ class Run:
         """Amendment 7. Passers of every gate go in by their pool-increment LB on SELECT, highest first. After each one the pool is refit and every remaining passer is read again against it: it stays only with SELECT dacc > 0 and LB > 0.
         The refit fits on the score rows, the only FIT rows an accepted member has answers on before its bring-up. 0 to all passers per round; each step is logged."""
         from vrsi27.boost.edge import learn_gain
-        left = sorted([(m, row) for m, row in top if row.get("would_accept") and not (self.narrow_rule and row.get("narrow"))], key=lambda x: -float(x[1]["ce_gain_select_lb"]))
+        judge = self.c128_replaces(r)        # 128c: one judge for wide and narrow members; the narrow rule's own route is off
+        left = sorted([(m, row) for m, row in top if row.get("would_accept") and (judge or not (self.narrow_rule and row.get("narrow")))], key=lambda x: -float(x[1]["ce_gain_select_lb"]))
         chosen, steps = [], []
         while left:
             m, row = left.pop(0)
@@ -2101,7 +2418,7 @@ class Run:
                 else:
                     rw["dropped_after"] = m["name"]
             left = sorted(stay, key=lambda y: -y[1]["lb_now"])
-        if self.narrow_rule:
+        if self.narrow_rule and not judge:
             self.accept_narrow(members, top, r, chosen, steps)
         return chosen, steps
 
@@ -2222,7 +2539,7 @@ class Run:
             own = row.get("own_ops") or m.get("own_ops") or []
             row["stage2_filter"] = "kept" if id(row) in ids_top else "stopped"
             log.append(dict(name=m["name"], ops=own, zx_stage1=row.get("zx_score"), filter=row["stage2_filter"], by=row.get("stage2_by")))
-        cands = [(m, row) for m, row in have if id(row) not in ids_top and set(row.get("own_ops") or m.get("own_ops") or []) & ours] if plateau and self.fusion == "ds_agree" else []
+        cands = [(m, row) for m, row in have if id(row) not in ids_top and set(row.get("own_ops") or m.get("own_ops") or []) & ours] if plateau and self.fusion in DS_MODES else []
         out = []
         if cands:
             allm = list(members) + [m for m, _ in cands]
@@ -2326,6 +2643,8 @@ class Run:
                 steps.append(dict(step=len(chosen), accepted=out["combo"]["set"], rule="combination", lb=out["combo"]["ce_gain_select_lb"], dacc=out["combo"]["dacc_select"], rows_up=out["combo"]["rows_up"], rows_down=out["combo"]["rows_down"], against=out["combo"]["against"]))
                 out["select_increment"] = self.set_increment(members, chosen)
                 reads += 1
+            out["plateau_after_combo"] = self.plateau_at_end(chosen, out["select_increment"])      # label only (A2 a): what the next round's plateau_now reads; plateau_end stays the trigger of the combination test
+            self.say(f"r{r}: after the combination test: accepted {[m['name'] for m in chosen]}, SELECT increment LB {(out['select_increment'] or {}).get('ce_gain_select_lb')} net {(out['select_increment'] or {}).get('net_rows')} -> next round is a plateau round: {out['plateau_after_combo']}")
         out.update(reads=reads, secs=time.time() - t0)
         return out
 
@@ -2668,7 +2987,7 @@ class Run:
             zx = float(zx_stats(tab, votes[an["name"]], votes[m["name"]], rows_for(e["op"]), self.data.cluster)["zx"] or 0)
             out.append(dict(edit=e, on=an["name"], op=e["op"], rows=int(len(rows)), d=d, dim="high" if d >= HIGH_D else "low", z=z, zx=zx, q=x.get("q_score"), s=x.get("s_score"), overlap=ov[top], overlap_with=top,
                             acc=float(P.correct[k, rows].mean()), fixes=int((all_wrong & ~bad).sum()), fit=float(np.clip(zx, -4, 4) + 2 * (1 - ov[top]))))
-        if self.fusion == "ds_agree":
+        if self.fusion in DS_MODES:
             try:
                 self.grid_pool(r, rd, members, have, votes, tab, sp, sample, rows_for)
             except Exception as e:     # a report never stops a round
@@ -2786,7 +3105,9 @@ class Run:
         from vrsi27.boost.lens import Budget, build_state, run_lens, validate_output, card_block, LensError, LeakError
         from vrsi27.boost.meta import allocate, pick_incumbent, pick_parent as lens_parent, select_examples, render_meta_prompt, meta_system_prompt
         f = f"{rd}/prompts.json"
-        if os.path.exists(f):
+        if os.path.exists(f):            # a restart inside the round: the offer the prompts were made with, so the parse checks the same scopes
+            o_, gi_ = self.gate_open(r, sorted({vh.key(self.data.rows[i]) for i in self.data.of("show")}))
+            self.gate_offer = set(o_) if gi_ else None
             return jload(f)
         a = self.a
         inc = pick_incumbent(brd, pop.incumbent, a["lens0"], min_n=4, posterior="normal")
@@ -2796,6 +3117,11 @@ class Run:
         g = self.guard(tab)
         w = dict(zip([m["name"] for m in members], st.cur.w)) if st.cur.w is not None else {}
         cats = sorted({vh.key(self.data.rows[i]) for i in self.data.of("show")})
+        cats, g_info = self.gate_open(r, cats)          # A1: only keys the writer can fit, read and score, not yet written
+        self.gate_offer = set(cats) if g_info else None
+        if g_info:
+            jdump(f"{rd}/gate_open.json", g_info)
+            self.say(f"r{r}: A1 gate keys: {len(g_info['eligible'])} eligible by fit>={g_info['rule']['fit']} read>={g_info['rule']['read']} score>={g_info['rule']['score']}, {len(g_info['written'])} written, {len(cats)} open: {cats}")
         alive = members
         plan = G = None
         S_hist = self.state.get("hist", [])
@@ -2813,21 +3139,30 @@ class Run:
                 split, best = PLATEAU_SPLIT, {o: v for o, v in best.items() if o in PLATEAU_OPS}
                 self.say(f"r{r}: plateau: slots {split}, grid from {sorted(best)}")
                 grid_all = sorted(best)
-            plan = split_ops(split, best, a["slots"], rng, cap, can_cross, S_hist if a.get("grid_fast") else None) if split and r >= split.get("from_round", 1) else allocate_ops(best, a["slots"], rng, cap)
+            plan = split_ops(split, best, a["slots"], rng, cap, can_cross, S_hist if a.get("grid_fast") else None, gate_cap=len(cats) if g_info else None) if split and r >= split.get("from_round", 1) else allocate_ops(best, a["slots"], rng, cap)
             if raised:
                 self.say(f"r{r}: grid_slots leaves out {sorted(set(grid_all) - set(plan))} of {grid_all}, best fit {({k: round(v, 2) for k, v in best.items()})}")
             uncapped = grid_slots(best, a["slots"] - 6) if best else {}
             jdump(f"{rd}/dose_cells.json", [dict(op=x["op"], name=x["edit"]["name"], alpha=x["edit"]["alpha"], first=x["edit"]["first"], last=x["edit"]["last"], acc=x["acc"], fit=x["fit"], zx=x["zx"], fixes=x["fixes"]) for x in G["rows_of"] if x["op"] in ("direction", "verbosity")])
             jdump(f"{rd}/slots.json", dict(cap=cap, slots=dict(collections.Counter(plan)), grid_uncapped=uncapped, best=best, raised=raised))
             self.say(f"r{r}: slots {dict(collections.Counter(plan))}; uncapped grid slots {uncapped}; cap {cap}; best fit {({k: round(v, 2) for k, v in best.items()})}")
+        if self.c9:                      # 1109c: the slot plan comes from the P level (program / cross / W slots), W slots over the admitted families
+            wt_, pr_ = [m for m in members if changes_network(m)], [m for m in members if m.get("program")]
+            plan = self.HW.plan(self, r, rng, len(wt_) >= 2 or any(u["name"] != v["name"] for u in wt_ for v in pr_), have_grid=G is not None)
+            best = best if G is not None else {}
+            old_ = jload(f"{rd}/slots.json", None)       # 1109c-final: slots.json logs the deal actually used (the grid-split plan above is only logged beside it)
+            jdump(f"{rd}/slots.json", dict(slots=dict(collections.Counter(plan)), order=list(plan), allocator=self.HW.cfg(self).get("allocator"),
+                                           deal=((self.state.get("slot_bandit") or {}).get("deals") or [None])[-1] if self.HW.cfg(self).get("allocator") == "ts" else None,
+                                           grid_split_plan_not_used=old_))
         score = {m["name"]: abs(w.get(m["name"], 0)) + float(pool.correct[k, sp.show].mean()) for k, m in enumerate(members)}
-        if self.fusion == "ds_agree":     # no stacking weight: what the member adds to the held-out pool, plus show accuracy
+        if self.fusion in DS_MODES:     # no stacking weight: what the member adds to the held-out pool, plus show accuracy
             loo = self.member_loo(members, votes, sp)
             score = {m["name"]: loo[m["name"]] + float(pool.correct[k, sp.show].mean()) for k, m in enumerate(members)}
             jdump(f"{rd}/parent_scores.json", [dict(name=m["name"], loo_fit=loo[m["name"]], show_acc=float(pool.correct[k, sp.show].mean()), score=score[m["name"]], stacking_abs_w=abs(float(w.get(m["name"], 0)))) for k, m in enumerate(members)])
             self.say(f"r{r}: parent score = leave-one-out held-out FIT gain + show accuracy: " + ", ".join(f"{m['name']} {1e4 * loo[m['name']]:+.1f}e-4 + {float(pool.correct[k, sp.show].mean()):.3f}" for k, m in enumerate(members)))
         reqs, wrongs = [], []
         spread, used = self.spread_on(r), set()
+        given = []                       # A4: operators given this round to cross slots without a fresh pair
         for k, lid in enumerate(slots):
             x, y = rng.choice(len(alive), 2, replace=False) if len(alive) > 1 else (0, 0)
             pa = alive[x] if score[alive[x]["name"]] >= score[alive[y]["name"]] else alive[y]
@@ -2839,7 +3174,7 @@ class Run:
                 pairs = [(u, v) for u in wt for v in pr if u["name"] != v["name"] and ok_(u, v)] + [(u, v) for u in wt for v in wt if u["name"] < v["name"] and ok_(u, v)]
                 seen_ = {frozenset(x) for x in self.state.get("cross_pairs", [])} | {frozenset(q["parents"]) for q in reqs if q.get("op") == "cross"}
                 if all(frozenset((u["name"], v["name"])) in seen_ for u, v in pairs):
-                    op = weak_op(S_hist, best, plan) if a.get("grid_fast") and best else "program"
+                    op = self.a4_cross_op(r, S_hist, best, plan, given) if a.get("grid_fast") and best else "program"
             if op == "program":              # a free program: any member of the pool, stock too
                 pa = alive[int(rng.integers(len(alive)))]
                 parents = [pa]
@@ -2888,9 +3223,16 @@ class Run:
                         user += f' Operator of this proposal: "{op}"' + (" (two parents above; edits may be empty)" if op == "cross" else "") + ". You choose its values and targets. A direction may carry either sign of alpha.\n\n" + self.prior_gains() + self.grid_text(G, op)
                     if answered_share(load_member(pa), self.data.of("show")) <= NARROW or ((pa.get("gate") or {}).get("scope") or "").startswith("cat:"):
                         user = user.replace(f"Goal: raise the standalone accuracy of `{pa['name']}`:", f"Goal: `{pa['name']}` is a narrow member, so its accuracy over all questions is not the aim. Make it right on more of its own rows:")
+                    sk_ = None
+                    if self.c9:          # 1109c: proposer notes, search state and <= 2 code-matched skills, proposer prompts only
+                        ex_, sk_ = self.HW.prompt_extra(self, sys.modules[__name__], r, k, op)
+                        user += ex_
                     user, card = no_conf_api(user), no_conf_api(card)
                     g.audit(user)
                     done = dict(id=f"s{k:02d}", slot=k, op=op, lens_id=t, lens_hash=pop.entries[t].sha256[:12], parents=[p["name"] for p in parents], card_text=card, system=self.system_text(), user=user, must=must, card_rows=[tab.ids[rid_row[x]] for c in out["cards"] for x in c["rows"] if x in rid_row])
+                    if self.c9:
+                        done["c1109_skills"] = sk_
+                        self.HW.check_cards(self, done)
                     break
                 except (LensError, LeakError, Exception) as e:
                     self.say(f"lens {t} slot {k}: {type(e).__name__}: {str(e)[:200]}")
@@ -3228,6 +3570,8 @@ class Run:
             d += dd
             ops.append(e["op"])
             if e["op"] == "gate":
+                if getattr(self, "gate_offer", None) is not None and str(s)[4:] not in self.gate_offer:
+                    raise Bad(f"gate scope {s} is not open this round (A1: too few rows to fit, read or score, or written already)")
                 gate = dict(note=change["gate"]["note"], scope=s)
             else:
                 g = apply_edit(g, change)
@@ -3248,8 +3592,388 @@ class Run:
         if gate:
             tag, m = sha(m["mid"] + canon(gate))[:14], with_gates(mk(prog), ps)        # the note is the change: without it every note on one parent has the parent's id and reads as a repeat
             m.update(gtag=tag, mid=tag)     # until the write lands the genome is the parent's, so the proposal keeps its own id; finish_gate gives the real one
+        if MENU_OPS[0] is not None:          # 1109c: an operator outside the menu is not available (knobs stay in the grid side table only)
+            bad_ = [o for o in ops if o not in set(MENU_OPS[0]) | {"program", "cross", "kernel"}]
+            if bad_:
+                raise Bad(f"operator not available in this run: {bad_}; available: {sorted(set(MENU_OPS[0]) | {'program'})}")
         m["own_ops"] = list(ops)     # m["ops"] carries the ancestors' too. Taken off again when the row is written
         return m
+
+    def a2(self, r):
+        """Amendment A2 (11-08): one gate write per category per round, and no program that abstains on every score row; from its from_round, None before it or without it."""
+        x = (jload(f"{self.work}/amendment.json", {}) or {}).get("a2")
+        return x if x and r >= x.get("from_round", 10 ** 9) else None
+
+    def a2_check(self, r, m, kids):
+        """A2 at parse, before a slot is kept, so the one re-ask can still use it: a gate on a category an earlier valid proposal of this round already took, and a program with fewer than min_score_rows score rows it does not abstain on (those reach stage 1 with no record and are dropped there)."""
+        a2 = self.a2(r)
+        if not a2:
+            return
+        sc = (m.get("gate") or {}).get("scope")
+        if sc:
+            other = next((x["name"] for x, _ in kids if (x.get("gate") or {}).get("scope") == sc), None)
+            if other:
+                raise Bad(f"gate scope {sc} is already taken this round by {other} (A2: one gate write per category per round); pick another open category")
+        if m.get("program"):
+            ids = self.data.of("score")
+            _, abst = program_rows(self.data, m, ids, render=False)
+            if len(ids) - len(abst) < int(a2.get("min_score_rows", 1)):
+                raise Bad(f"the program returns None on {len(abst)} of {len(ids)} score rows, so it cannot be scored (A2: at least {int(a2.get('min_score_rows', 1))}); make its trigger match rows of the categories it targets")
+
+    def a4(self, r):
+        """Amendment A4 (11-08): cross slots with no fresh pair go to the weakest operator the grid kept, one at a time; the round line's pool on a members-only Table. From its from_round, None before it or without it."""
+        x = (jload(f"{self.work}/amendment.json", {}) or {}).get("a4")
+        return x if x and r >= x.get("from_round", 10 ** 9) else None
+
+    def a4_cross_op(self, r, S_hist, best, plan, given):
+        """A cross slot whose usable pairs were all crossed already (grid_fast, a grid this round). Before A4: weak_op over all of best with the plan as it was, so every such slot took the same operator, and on a plateau round the one grid_slots had just left out for low fit (r4: attn_temp x3).
+        A4: weak_op over the operators of best that grid_slots kept in the plan, counting the plan and the operators already given to such slots this round; 'program' when the plan kept none. given is appended to."""
+        if not self.a4(r):
+            return weak_op(S_hist, best, plan)
+        keep = [o for o in sorted(best) if o in plan]
+        op = weak_op(S_hist, keep, list(plan) + given) if keep else "program"
+        given.append(op)
+        self.say(f"r{r}: A4: cross slot without a fresh pair -> {op} (grid kept {keep}; given to such slots this round {given})")
+        return op
+
+    def members_tables(self, members, votes):
+        """A4: votes, Table, pool, splits and state of the members alone, as compute(members) gives them, from votes already loaded. The reporter builds its Table the same way."""
+        vm = {m["name"]: votes[m["name"]] for m in members}
+        tab = Table(self.data, self.data.learn, vm)
+        pool = tab.pool(self.data, members, vm)
+        sp = splits(self.data, tab)
+        return vm, tab, pool, sp, state_of(pool, sp, members)
+
+    # ------------------------------------------------------------ 128c (Fable 11-09 §4.1, §4.3, §4.4): judge, scope and fusion ------------------------------
+    def c128(self, r=None, key=None, default=None):
+        """prereg "c128" from its from_round: the whole block (key None) or one field, default when the block is off or lacks it. Absent: every 128c rule is off and A4 stands."""
+        x = (self.a or {}).get("c128")
+        on = bool(x) and (r is None or r >= int(x.get("from_round", 1)))
+        if key is None:
+            return x if on else None
+        return x.get(key, default) if on else default
+
+    def c128_replaces(self, r):
+        """The 128c judge decides stage 1 and stage 2 (mode replace, the default); mode "and" keeps the old verdict and ANDs the new one into it."""
+        return bool(self.c128(r, "judge")) and self.c128(r, "mode", "replace") == "replace"
+
+    def no_id(self, ids, where):
+        """ID guard: a decision reads LEARN rows only. ID (IID half 1) and OOD rows raise; so does any row with no LEARN role."""
+        bad = [i for i in ids if i not in self.data.role]
+        if bad:
+            raise RuntimeError(f"128c ID guard: {where} asked for {len(bad)} rows outside LEARN (ID or OOD), e.g. {bad[:3]}")
+        return ids
+
+    def c128_rotate(self, r):
+        """Split refresh (a): this round's SELECT, dealt by the preregistered seed schedule. Logged, and written to the round dir."""
+        if self.c128(r, "refresh") != "rotate":
+            return None
+        out = self.data.rotate(r, int(self.c128(r, "rotate_seed", 1109)))
+        self.say(f"r{r}: 128c SELECT rotation (seed {self.c128(r, 'rotate_seed', 1109)}): select/score rows per bench {out}")
+        jdump(f"{self.work}/r{r:03d}/rotation.json", dict(round=r, benches=out, select=self.data.of("select")))
+        return out
+
+    def c128_scope_check(self, r, m):
+        """§4.1: a program is mandatory for a member with engine edits; it defines the member's scope (where it does not return None). A gate member's scope is its category."""
+        if self.c128(r, "scope") and has_engine(m) and not m.get("gate") and not m.get("program"):
+            raise Bad("a member with engine edits must carry a program: the program defines where the edited member answers (return None elsewhere), and outside that scope it casts no vote")
+
+    def c128_critic(self, r, rd, kids):
+        """§4.4.6: before any engine time, the frozen model reads each valid proposal and says whether it encodes an answer. 'yes' drops the proposal. A failed critic call drops nothing (logged)."""
+        if not self.c128(r, "critic"):
+            return kids
+        live = [(m, row) for m, row in kids if row.get("valid")]
+        if not live:
+            return kids
+        d = f"{rd}/critic"
+        os.makedirs(d, exist_ok=True)
+        if not os.path.exists(f"{d}/prompts.json"):
+            jdump(f"{d}/prompts.json", [dict(id=f"leak{row['slot']}", slot=row["slot"], system=CRITIC_SYSTEM, user=CRITIC_ASK + "\n\n" + critic_text(m)) for m, row in live])
+        try:
+            got = {x["id"]: x for x in self.generate(jload(f"{d}/prompts.json"), d)}
+        except (RuntimeError, Bad, OSError) as e:
+            self.say(f"r{r}: 128c leakage critic failed, nothing dropped: {str(e)[:200]}")
+            return kids
+        for m, row in live:
+            v = critic_verdict((got.get(f"leak{row['slot']}") or {}).get("content"))
+            row["leak_critic"] = v
+            if v == "yes":
+                row.update(valid=False, status="invalid: leakage critic: " + str((got.get(f"leak{row['slot']}") or {}).get("content"))[:300])
+        self.say(f"r{r}: 128c leakage critic: " + ", ".join(f"{row.get('name')} {row.get('leak_critic')}" for _, row in live))
+        return [(m, row) for m, row in kids if row.get("valid")]
+
+    def c128_draw(self, p, d):
+        """Draw d of parent p in its current epoch (a null that passed moved the epoch on)."""
+        return draw_of(p, d + DRAW_EPOCH * int((self.state.get("c128_epoch") or {}).get(p["name"], 0)))
+
+    def c128_request(self, r, kids, by, qm, q_full):
+        """Asked beside stage 1, for every parent of this round's candidates: band draws 1-3 and the null's draw 4 on the rows its children are read on and on SELECT; draw 4 also on all score rows (the null's stage 2 rows, as a candidate's);
+        draws 3 and 5 on SELECT for the 4-sample stage 2. On disk, cached while the parent is unchanged: evaluate_many asks only rows not there."""
+        if not self.c128(r, "judge"):
+            return
+        sel = self.no_id(self.data.of("select"), "draw requests")
+        reqs = []
+        for pn in sorted({m["parents"][0] for m, _ in kids}):
+            p = by[pn]
+            rows = sorted(set().union(*[set(qm(m)) for m, _ in kids if m["parents"][0] == pn]) | set(sel))
+            reqs += [(self.c128_draw(p, d), rows) for d in BAND_DRAWS]
+            if self.c128(r, "null", True):
+                reqs += [(self.c128_draw(p, NULL_DRAW), sorted(set(rows) | set(q_full))), (self.c128_draw(p, NULL_DRAW2), sel)]
+        self.ev.evaluate_many(reqs)
+
+    def c128_request_s2(self, r, top):
+        """Each stage 2 candidate's own draw 3 on SELECT: its samples 2,3, paired by seed with the parent's draw 3."""
+        if self.c128(r, "judge") and int(self.c128(r, "s2_samples", 4)) == 4:
+            self.ev.evaluate_many([(draw_of(m, PAIR_DRAW), self.data.of("select")) for m, row in top if not row.get("null")])
+
+    def c128_votes(self, members, more):
+        """votes, Table, splits and the members' fused pool on one Table that holds every vote of members + more (draws included), so a draw's answer has its own column."""
+        allm = list(members) + [m for m in more if m["name"] not in {x["name"] for x in members}]
+        votes = self.votes(allm)
+        tab = Table(self.data, self.data.learn, votes)
+        sp = splits(self.data, tab)
+        fu = self.fz("fuse", self.fuser.fuse, members, votes, self.data, self.fusion, sp=sp)
+        return votes, tab, sp, fu
+
+    def c128_stage1(self, r, rd, members, have, qm, by):
+        """Stage 1 (§4.4.2): on its fired set in scope, |F| >= fired_min and net paired rows on F >= max(0, band mean) + band delta, the band being the parent's three draws read on the same F.
+        zx stays the ranking. The null competitor of every parent (draw 4) goes through the same test. Returns stage 2's list: confirmations first (refresh cap), passers by zx, nulls that passed."""
+        c = self.c128(r)
+        fmin, k = int(c.get("fired_min", 8)), float(c.get("band_k", 1.65))
+        nulls = []
+        if c.get("null", True):
+            for pn in sorted({m["parents"][0] for m, _ in have}):
+                rows = sorted(set().union(*[set(qm(m)) for m, _ in have if m["parents"][0] == pn]))
+                nm = dict(self.c128_draw(by[pn], NULL_DRAW), parents=[pn], null_of=pn, slot=f"null_{pn}")
+                nulls.append((nm, dict(round=r, slot=nm["slot"], name=nm["name"], mid=nm["mid"], ops=["null"], own_ops=["null"], valid=True, scored=True, null=True, null_of=pn, c128_rows=rows)))
+        cand = list(have) + nulls
+        pm = {m["parents"][0]: by[m["parents"][0]] for m, _ in cand}
+        votes, tab, sp, fu = self.c128_votes(members, [m for m, _ in cand] + [self.c128_draw(p, d) for p in pm.values() for d in BAND_DRAWS])
+        pa = pool_cols(fu)
+        for m, row in cand:
+            p = pm[m["parents"][0]]
+            ids = self.no_id(row.get("c128_rows") or list(qm(m)), "stage 1")
+            vc, vp = votes[m["name"]], votes[p["name"]]
+            F = fired_rows(tab, vc, pa, ids)
+            stat = (lambda mv: vs_pool(tab, mv, pa, F)) if c.get("stat", "pool") == "pool" else (lambda mv: paired(mv, vp, F))      # pool: §4.3 |F| (q_m - q_a); parent: paired right rate against the parent's own samples
+            net = float(sum(stat(vc).values()))
+            b = band_of([float(sum(stat(votes[self.c128_draw(p, d)["name"]]).values())) for d in BAND_DRAWS], k)
+            thr = None if b["delta"] is None else (b["delta"] if c.get("band_center", "mean") == "zero" else max(0., b["mean"]) + b["delta"])     # "zero": the spec's letter, net >= delta_F; "mean" (default): beat what the re-seeded parent does on F, max(0, its mean) + delta
+            ok = len(F) >= fmin and thr is not None and net >= thr
+            if row.get("null"):
+                zz = zx_stats(tab, vp, vc, ids, self.data.cluster)
+                row.update(zx_score=zz["zx"], dacc_paired_score=zz["dacc"], strata_score=zz.get("strata"))
+            row["c128_s1"] = dict(rows=len(ids), fired=len(F), net=net, band=b, thr=thr, passes=bool(ok), why=None if ok else ("fired < %d" % fmin if len(F) < fmin else "no band" if thr is None else "net inside the null band"))
+            self.say(f"  128c stage 1 {m['name']}: fired {len(F)} of {len(ids)} | net {net:+.2f} rows vs band {b['values']} -> thr {thr if thr is None else round(thr, 2)} -> {'pass' if ok else 'fail: ' + row['c128_s1']['why']}")
+        n = int(c.get("stage2_max") or self.a.get("stage2_wide") or self.a["stage2"])
+        passed = sorted([x for x in have if x[1]["c128_s1"]["passes"]], key=lambda x: -float(x[1].get("zx_score") or 0))
+        conf = []
+        for m0 in (self.state.get("c128_confirm") or []) if c.get("refresh") == "cap" and c.get("confirm", True) else []:
+            m1 = dict(m0, slot=f"conf_{m0['mid']}")
+            conf.append((m1, dict(round=r, slot=m1["slot"], name=m1["name"], mid=m1["mid"], ops=m1.get("ops"), own_ops=m1.get("own_ops"), valid=True, scored=False, card_rows=m1.get("card_rows"), confirm_of=m0.get("confirm_from"), stage2_by="confirm", narrow=m0.get("narrow"))))
+        top = conf + passed
+        cap = int(c.get("read_cap", 3)) if c.get("refresh") == "cap" else n + len(conf)
+        for m, row in top[cap:]:
+            row["stage2_by"] = "over the SELECT read cap"
+        top = top[:cap]
+        for m, row in top:
+            row.setdefault("stage2_by", "128c stage 1")
+        nl = [x for x in nulls if x[1]["c128_s1"]["passes"]]
+        jdump(f"{rd}/c128_stage1.json", [dict(name=row["name"], null=bool(row.get("null")), zx=row.get("zx_score"), **row["c128_s1"]) for _, row in cand])
+        self.say(f"r{r}: 128c stage 2 list: {[m['name'] for m, _ in top]}; nulls passing stage 1 (read in stage 2): {[m['name'] for m, _ in nl]}; nulls failing: {[m['name'] for m, row in nulls if not row['c128_s1']['passes']]}")
+        return top + nl
+
+    def c128_decide(self, r, members, top, by):
+        """Stage 2 on SELECT (§4.4.3), after the round's usual stage 2 numbers: in scope, 4 samples (base + draw 3, the parent's base + draw 3), on the fired set:
+        HarnessBank paired z >= z_min with mean > 0, the pool-increment CE LB > 0 (as now), DarwinX no-harm R(m) <= the band of R over the parent's draws on the same rows (2 samples each, against the parent's own),
+        the card-vs-unseen rule, and (scope on) the diversity floor for weight members. |F| < fired_min: no single read; the other checks hold, the joint read decides. The null (draws 4+5) is read the same way and never accepted."""
+        c = self.c128(r)
+        fmin, k, zmin, s4 = int(c.get("fired_min", 8)), float(c.get("band_k", 1.65)), float(c.get("z_min", 1.96)), int(c.get("s2_samples", 4)) == 4
+        sel = self.no_id(self.data.of("select"), "stage 2")
+        more = []
+        for m, row in top:
+            p = by[m["parents"][0]]
+            more += [m, p] + [self.c128_draw(p, d) for d in BAND_DRAWS]
+            if s4:
+                more.append(self.c128_draw(p, NULL_DRAW2) if row.get("null") else draw_of(m, PAIR_DRAW))
+        seen, uniq = set(), []
+        for x in more:
+            if x["name"] not in seen:
+                seen.add(x["name"]); uniq.append(x)
+        votes, tab, sp, fu = self.c128_votes(members, uniq)
+        pa = pool_cols(fu)
+        mvotes = [votes[x["name"]] for x in members]
+        out = dict(null_pass=[], small=[], read=[])
+        for m, row in top:
+            p = by[m["parents"][0]]
+            vc, vp = votes[m["name"]], votes[p["name"]]
+            if row.get("stage2_status") != "ok":
+                row["c128"] = dict(passes=False, why=f"stage 2 status {row.get('stage2_status')}")
+                row["would_accept"] = False
+                continue
+            if s4:
+                c4 = merge4(vc, votes[(self.c128_draw(p, NULL_DRAW2) if row.get("null") else draw_of(m, PAIR_DRAW))["name"]])
+                p4 = merge4(vp, votes[self.c128_draw(p, PAIR_DRAW)["name"]])
+            else:
+                c4, p4 = vc, vp
+            scope = [i for i in sel if vc.get(i)]
+            F = fired_rows(tab, c4, pa, scope)
+            zz = hb_z((vs_pool(tab, c4, pa, F) if c.get("stat", "pool") == "pool" else paired(c4, p4, F)).values())
+            R = harm(paired(vc, vp, scope))
+            bR = band_of([harm(paired(votes[self.c128_draw(p, d)["name"]], vp, scope)) for d in BAND_DRAWS], k)
+            harm_ok = bR["delta"] is not None and R <= bR["mean"] + bR["delta"]
+            lb_ok = bool(gain_positive(row))
+            card_ok = not (c.get("card_unseen", True) and (row.get("card_rows_n") or 0) > 0 and (row.get("dacc_card") or 0) > 0 and (row.get("dacc_fit") or 0) <= 0)
+            div, div_ok = None, True
+            if c.get("diversity") and specialist(m) and not row.get("null"):
+                fitsc = [i for i in self.data.learn if self.data.role[i] in ("score", "select") and vc.get(i)]
+                div = diversity(tab, vc, vp, fitsc, mvotes)
+                div_ok = div["share"] >= float(c.get("div_share", .2)) and div["right_on_none"] >= int(c.get("div_none", 1))
+            big = len(F) >= fmin
+            z_ok = big and zz["mean"] is not None and zz["mean"] > 0 and zz["z"] >= zmin
+            passes = bool(z_ok and lb_ok and harm_ok and card_ok and div_ok)
+            small = bool(not big and harm_ok and card_ok and div_ok)
+            why = [n for n, t in (("z", z_ok or not big), ("pool_lb", lb_ok), ("no_harm", harm_ok), ("card_vs_unseen", card_ok), ("diversity", div_ok)) if not t] + (["fired<%d: joint read only" % fmin] if not big else [])
+            row["c128"] = dict(scope_rows=len(scope), fired=len(F), z=zz, harm=R, harm_band=bR, harm_thr=None if bR["delta"] is None else bR["mean"] + bR["delta"], pool_lb=row.get("ce_gain_select_lb"), card_ok=card_ok, diversity=div, passes=passes, small=small, why=why, samples=4 if s4 else 2)
+            row["old_would_accept"] = bool(row.get("would_accept"))
+            out["read"].append(m["name"])
+            if row.get("null"):
+                row["would_accept"] = False
+                if passes or (small and lb_ok):
+                    out["null_pass"].append(m["name"])
+            else:
+                new = passes and (row["old_would_accept"] if not self.c128_replaces(r) else True)
+                if new and c.get("refresh") == "cap" and c.get("confirm", True) and not row.get("narrow") and not row.get("confirm_of"):
+                    row["c128_confirm_next"] = True          # a wide member: accepted only if the next round's SELECT confirms it
+                    new = False
+                row["would_accept"] = bool(new)
+                if small and not row.get("confirm_of"):
+                    out["small"].append(m["name"])
+                if self.c128_replaces(r):
+                    row["rejected_by"] = why
+            self.say(f"  128c stage 2 {m['name']}{' (null)' if row.get('null') else ''}: scope {len(scope)} fired {len(F)} z {zz['z']} mean {zz['mean']} | no-harm R {R:.2f} vs {row['c128']['harm_thr']} | pool LB {row.get('ce_gain_select_lb')} | card ok {card_ok} | diversity {div} -> {'PASS' if passes else 'joint read' if small else 'fail'} {why}")
+        return out
+
+    def c128_finish(self, r, rd, members, top, chosen, steps, dec):
+        """After accept_in_order: one joint read of the small-fired members on the pool with the round's accepted (CE LB > 0, accuracy not down), then the null's verdict: a null that passed voids every acceptance of the round
+        and moves its parent's draws to a new epoch (the band is measured again). Wide passers waiting for confirmation go to state (refresh cap)."""
+        S, by_n = self.state, {m["name"]: (m, row) for m, row in top}
+        joint = None
+        small = [by_n[n] for n in dec["small"] if n in by_n]
+        if small and self.c128(r, "joint", True):
+            now = list(members) + list(chosen)
+            votes, sp = self.fit_rows_read(now + [m for m, _ in small])
+            f0 = self.fz("fuse", self.fuser.fuse, now, votes, self.data, self.fusion, sp=sp)
+            f1 = self.fz("fuse", self.fuser.fuse, now + [m for m, _ in small], votes, self.data, self.fusion, sp=f0.sp)
+            joint = dict(self.set_gain(f0, f1), members=[m["name"] for m, _ in small], against=[x["name"] for x in now])
+            joint["passes"] = bool(float(joint["ce_gain_select_lb"] or 0) > GAIN_TOL and float(joint["dacc_select"]) >= -GAIN_TOL)
+            self.say(f"r{r}: 128c joint read of {joint['members']}: LB {joint['ce_gain_select_lb']} dacc {joint['dacc_select']} rows up {joint['rows_up']} down {joint['rows_down']} -> {'ACCEPT' if joint['passes'] else 'no'}")
+            if joint["passes"]:
+                for m, row in small:
+                    chosen.append(m)
+                    row.update(accepted=True, accept_order=len(chosen), joint=True)
+                steps.append(dict(step=len(chosen), accepted=joint["members"], rule="128c joint read", lb=joint["ce_gain_select_lb"], dacc=joint["dacc_select"], against=joint["against"]))
+        void = None
+        if dec["null_pass"]:
+            void = [m["name"] for m in chosen]
+            for m in chosen:
+                by_n[m["name"]][1].update(accepted=False, void=True)
+            del chosen[:]
+            ep = S.setdefault("c128_epoch", {})
+            for n in dec["null_pass"]:
+                pn = by_n[n][0]["null_of"]
+                ep[pn] = int(ep.get(pn, 0)) + 1
+            steps.append(dict(rule="128c void", nulls=dec["null_pass"], voided=void))
+            self.say(f"r{r}: 128c NULL PASSED ({dec['null_pass']}): the round's acceptances are void ({void}); band epochs now {ep}")
+        if self.c128(r, "refresh") == "cap" and self.c128(r, "confirm", True):
+            S["c128_confirm"] = [] if void is not None else [dict(m, confirm_from=r, narrow=row.get("narrow"), card_rows=row.get("card_rows")) for m, row in top if row.get("c128_confirm_next")]
+            if S["c128_confirm"]:
+                self.say(f"r{r}: 128c wide passers waiting for next round's SELECT confirmation: {[m['name'] for m in S['c128_confirm']]}")
+        rec = dict(round=r, joint=joint, void=void, null_pass=dec["null_pass"], read=dec["read"], rows=[dict(name=row.get("name"), null=bool(row.get("null")), confirm_of=row.get("confirm_of"), s1=row.get("c128_s1"), s2=row.get("c128"), accepted=bool(row.get("accepted"))) for _, row in top])
+        jdump(f"{rd}/c128.json", rec)
+        return rec
+
+    def a3(self, r):
+        """Amendment A3 (11-08): distinct open keys for parallel re-asks of A2 gate-key refusals; from its from_round, None before it or without it."""
+        x = (jload(f"{self.work}/amendment.json", {}) or {}).get("a3")
+        return x if x and r >= x.get("from_round", 10 ** 9) else None
+
+    def a3_assign(self, r, pending, kids):
+        """A3, before the re-ask prompts: the slots A2 refused for a gate key already taken this round are re-asked in parallel, so two of them can pick the same open key (r4: s05 and s09 both took charxiv|number-in-general). With two or more such slots, each gets its own still-open key by slot order: open = this round's offer less the keys valid proposals took. Slots beyond the open keys keep the A2 reason (they stay invalid as before). Nothing without A3, without an offer, or with fewer than two such slots."""
+        out = dict(colliding=[], open=[], assigned={}, extra=[])
+        if not self.a3(r) or getattr(self, "gate_offer", None) is None:
+            return out
+        col = sorted(q["slot"] for q, _, row in pending if re.search(r"gate scope cat:.+ is already taken this round by \S+ \(A2:", str(row.get("status"))))
+        if len(col) < 2:
+            return out
+        taken = {str((m.get("gate") or {}).get("scope") or "")[4:] for m, _ in kids if (m.get("gate") or {}).get("scope")}
+        free = [k for k in sorted(self.gate_offer) if k not in taken]
+        out.update(colliding=col, open=free, assigned=dict(zip(col, free)), extra=col[len(free):])
+        self.say(f"r{r}: A3: {len(col)} re-asks for a taken gate key, slots {col}; open keys {free}; assigned " + (", ".join(f"s{s} cat:{k}" for s, k in out["assigned"].items()) or "none"))
+        if out["extra"]:
+            self.say(f"r{r}: A3: slots {out['extra']} get no key: {len(col)} colliding slots but {len(free)} open keys; they keep the A2 reason and stay invalid unless their answer finds a key no one took")
+        return out
+
+    def a3_why(self, a3_, slot, why_):
+        """A3: the re-ask reason of a slot that was assigned a key names that key; every other reason is unchanged."""
+        k = a3_["assigned"].get(slot)
+        return why_ if k is None else why_.replace("; pick another open category", "") + f"; use cat:{k} (assigned to you; other open keys are claimed by other re-asks)"
+
+    def a3_final(self, r, a3_, pending):
+        """A3, after the re-ask: the parse (a2_check against the valid proposals so far, in slot order) is the final check; each colliding slot that is still invalid gets a log line saying why."""
+        if not a3_["colliding"]:
+            return
+        after = {}
+        for q, _, row in pending:
+            s = q["slot"]
+            if s not in a3_["colliding"]:
+                continue
+            after[str(s)] = "valid " + str(row.get("name")) if row["valid"] else str(row.get("status"))
+            if row["valid"]:
+                continue
+            k = a3_["assigned"].get(s)
+            why = (f"assigned cat:{k}, " if k else f"no open key left ({len(a3_['colliding'])} colliding slots, {len(a3_['open'])} open keys), ") + (f"re-ask answer refused: {str(row.get('status')).replace('invalid: ', '', 1)[:300]}" if row.get("status") != row.get("first_status") else "no new refusal reason (no re-ask answer, or the same refusal)")
+            self.say(f"r{r}: A3: slot {s} stays invalid: {why}")
+        a3_["after"] = after
+
+    def a1(self, r):
+        """Amendment A1 (11-08): gate eligibility, early drop and gate slot cap from its from_round; None before it or without it."""
+        x = (jload(f"{self.work}/amendment.json", {}) or {}).get("a1")
+        return x if x and r >= x.get("from_round", 10 ** 9) else None
+
+    def gate_rows(self, cat):
+        """FIT rows (learn outside SELECT) of a gate key, the rows the writer fits and reads."""
+        return [i for i in self.data.learn if self.data.role[i] != "select" and vh.key(self.data.rows[i]) == cat]
+
+    def gate_ok(self, ids, a1):
+        """A1's size rule on a key's rows: writer split fit >= a1 fit, read >= a1 read, and score rows >= a1 score (stage 1 asks a gate member only score rows of its key). (ok, fit, read, score)."""
+        nf_, nr_ = self.gate_split(ids)
+        ns_ = sum(1 for i in ids if self.data.role[i] == "score")
+        return nf_ >= a1["fit"] and nr_ >= a1["read"] and ns_ >= a1["score"], nf_, nr_, ns_
+
+    def gate_written(self, r):
+        """Keys a gate write of this run has already been made for in a round before r: a hist row with own op gate whose write file landed."""
+        out = set()
+        for p in self.state.get("hist", []):
+            if int(p.get("round", 0)) < r and "gate" in (p.get("own_ops") or []) and p.get("write_file") and os.path.exists(p["write_file"]):
+                d = os.path.dirname(p["write_file"])
+                try:
+                    k = open(f"{d}/note.tsv").read()      # the scope is not in the row; the writer's command named it, and its key rows are in traces.jsonl
+                except OSError:
+                    continue
+                ids = {json.loads(l)["id"] for l in open(f"{d}/traces.jsonl")} if os.path.exists(f"{d}/traces.jsonl") else set()
+                out |= {vh.key(self.data.rows[i]) for i in ids if i in self.data.rows}
+        return out
+
+    def gate_open(self, r, cats):
+        """A1: the show keys a gate may name this round: size rule passed and not written yet in this run. All of cats without A1."""
+        a1 = self.a1(r)
+        if not a1:
+            return list(cats), None
+        done = self.gate_written(r)
+        info = {c: self.gate_ok(self.gate_rows(c), a1) for c in cats}
+        ok = [c for c in cats if info[c][0] and c not in done]
+        return ok, dict(eligible=[c for c in cats if info[c][0]], written=sorted(done & {c for c in cats if info[c][0]}), open=ok, rule=dict(fit=a1["fit"], read=a1["read"], score=a1["score"]))
 
     def gate_split(self, ids):
         """mm_gate.py's split of the traced rows into fit and read: crc32 parity or, when all fall on side 0, a quarter by sha256. Counts only: the writer does its own split."""
@@ -3283,12 +4007,36 @@ class Run:
                         g_, ok_, _ = regrade(r, self.data.rows[r["id"]])          # the writer reads ok: from the pool row, as every other reader
                         r.update({k: g_[k] for k in GRADE_FIELDS if k in g_}, ok=ok_)
                         dump.setdefault((r["id"], r.get("sample", 0)), json.dumps(r, ensure_ascii=False) + "\n")
+        wide = None
+        kprompts = None
+        c9_ = self.HW.cfg(self) if getattr(self, "HW", None) is not None and (self.a or {}).get("c1109") else {}
+        if c9_.get("gate_key") == "prompts":          # gate_v3 (11-09, off by default): the key also fits on >= gate_key_min UNLABELED in-scope prompts from c1109.gate_prompts; ID/OOD excluded by id and image sha, pool rows by id
+            bad_id = set(self.data.id_rows) | set(self.data.ood_rows) | set(self.data.rows)
+            bad_sha = {x for i in list(self.data.id_rows) + list(self.data.ood_rows) for x in (self.data.rows[i].get("img_sha256") or [])}
+            kprompts = [r for r in vh.read_jsonl([c9_["gate_prompts"]]).values() if vh.key(r) == cat and r["id"] not in bad_id and r.get("image_paths") and not set(r.get("img_sha256") or []) & bad_sha]
+            if len(kprompts) < c9_.get("gate_key_min", 20):
+                m["gate_drop"] = f"gate_v3 key {cat}: {len(kprompts)} unlabeled prompts after the ID/OOD exclusion < {c9_.get('gate_key_min', 20)}"
+                return f
+        if c9_:      # V1 (11-09, off by default): the trigger key is fit on every FIT row of the scope's bench, not on its 2-7 category rows
+            if c9_.get("gate_key") == "bench":
+                b_ = cat.split("|")[0]
+                G = [i for i in fit if (self.data.rows[i].get("bench") or i.split("/")[0]) == b_]
+                wide = c9_.get("gate_key_min", 40)
         gs = set(G)
         traced = sorted({i for (i, _), l in dump.items() if i in gs and json.loads(l).get("reasoning") and self.data.rows[i].get("image_paths")})
+        if wide is not None and len(traced) < wide:
+            m["gate_drop"] = f"V1 bench key {cat.split('|')[0]}: {len(traced)} traced FIT rows < {wide}"
+            return f
         nf_, nr_ = self.gate_split(traced)
         if not nf_ or not nr_:         # the writer stops on an empty side: no engine time, no retries, one logged reason
             m["gate_drop"] = f"category {cat} has {len(G)} FIT rows, {len(traced)} traced: {nf_} to fit and {nr_} to read, the writer needs both"
             return f
+        a1 = None if (wide is not None or kprompts is not None) else self.a1(getattr(self, "cur_round", self.state.get("round", 0) + 1))      # V1: the size rule is the bench minimum above
+        if a1:                         # A1: the same size rule as the offer, on the traced rows; no engine time, no retries
+            ok_, f1, r1, s1 = self.gate_ok(traced, a1)
+            if not ok_:
+                m["gate_drop"] = f"category {cat} has {len(G)} FIT rows, {len(traced)} traced: {f1} to fit, {r1} to read, {s1} score rows; A1 needs fit>={a1['fit']} read>={a1['read']} score>={a1['score']}"
+                return f
         if not os.path.exists(f"{d}/others.jsonl"):
             with open(f"{d}/traces.jsonl", "w") as o:
                 for (i, _), l in dump.items():
@@ -3297,14 +4045,35 @@ class Run:
             with open(f"{d}/others.jsonl", "w") as o:
                 for l in dump.values():
                     o.write(l)
-        open(f"{d}/note.tsv", "w").write(f"{tag}\t{m['gate']['note']}\n")
+        note_lines = f"{tag}\t{m['gate']['note']}\n"
+        if kprompts is not None and c9_.get("gate_control_note"):     # gate_v3: a matched wrong-content control written with the same keys in the same job (arm gt_ctrl_<tag>.json); the judge reads it beside the gate
+            golds = collections.defaultdict(set)
+            for i_ in self.data.learn:
+                golds[vh.key(self.data.rows[i_])].add(str(self.data.rows[i_].get("answer")))
+            cn_, src_ = control_note(m["gate"]["note"], cat, self.state.get("c1109_gate_notes") or [], golds, c9_["gate_control_note"], tag)
+            m["gate_control_src"] = src_
+            note_lines += f"ctrl_{tag}\t{cn_}\n"
+            m["gate_control_file"] = f"{d}/gt_ctrl_{tag}.json"
+            m["gate_control_note"] = cn_
+        open(f"{d}/note.tsv", "w").write(note_lines)
+        keyarg = f"--cat {shlex.quote(cat.replace(' ', '~'))}"
+        if kprompts is not None:
+            with open(f"{d}/key_prompts.jsonl", "w") as o:
+                for r in kprompts:
+                    o.write(json.dumps({k: v for k, v in r.items() if k not in ("answer", "options_answer")}, ensure_ascii=False) + "\n")
+            keyarg += f" --key-prompts {d}/key_prompts.jsonl"
+        if wide is not None:           # V1: --plain = the bench's traced FIT rows (pool records); mm_gate fits the key on them and reads its unseen check on its own held-out quarter
+            with open(f"{d}/plain.jsonl", "w") as o:
+                for i in traced:
+                    o.write(json.dumps(self.data.rows[i], ensure_ascii=False) + "\n")
+            keyarg = f"--plain {d}/plain.jsonl"
         en = f" --engine {self.ev.arm(parent['genome'])}" if parent["genome"]["engine"] else ""
         if GEN_KEY.get("effort", "medium") != "medium":         # 128: the writer's chat template at the run's effort (mm_gate --effort); medium leaves the command as before
             en += f" --effort {GEN_KEY['effort']}"
         if GATE_TRACE_CAP:                                       # 128 prereg gate_trace_cap: the writer's trace cut and length filter (mm_gate's 3000 before)
             en += f" --trace-cap {GATE_TRACE_CAP}"
         self.__dict__.setdefault("write_jobs", {}).setdefault(f, []).append((f"hb{self.ev.tag}_w{n or ''}_{tag[:10]}", time.time()))
-        self.ev.submit(f"w{n or ''}_{tag[:10]}", f"python -u rsi/mm_gate.py --model {self.ev.model(parent['genome'])} --traces {d}/traces.jsonl --others {d}/others.jsonl --pool {getattr(self, "pool_file", IID)} --notes {d}/note.tsv --out {d}/gt --arms {d} --cat {shlex.quote(cat.replace(' ', '~'))} --strict-half0{en}", [f], f + ".failed")
+        self.ev.submit(f"w{n or ''}_{tag[:10]}", f"cd {TREE} && python -u rsi/mm_gate.py --model {self.ev.model(parent['genome'])} --traces {d}/traces.jsonl --others {d}/others.jsonl --pool {getattr(self, "pool_file", IID)} --notes {d}/note.tsv --out {d}/gt --arms {d} {keyarg} --strict-half0{en}", [f], f + ".failed")
         return f
 
     def write_clock(self, f):
@@ -3368,18 +4137,34 @@ class Run:
             t = open(t).read()
             x = re.search(r"unseen: all-text p median ([\d.]+)", t)
             y = re.search(r"p\(start the note\) mean ([\d.]+)", t)
-            if x and float(x.group(1)) < .5:
+            c9f = self.HW.cfg(self) if getattr(self, "HW", None) is not None and (self.a or {}).get("c1109") else {}
+            rmin, mmax = (c9f.get("gate_recite_min", .95), c9f.get("gate_misfire_max", .01)) if c9f.get("gate_key") == "prompts" else (.5, .01)    # gate_v3: writer checks recital >= .95, misfire <= .01
+            if x and float(x.group(1)) < rmin:
                 raise Bad(f"write did not reach unseen problems, median {x.group(1)}")
-            if y and float(y.group(1)) > .01:
+            if y and float(y.group(1)) > mmax:
                 raise Bad(f"note starts on other tasks, {y.group(1)}")
         g = dict(parent["genome"], engine=arm)
         n = member(g, m.get("program"), origin="proposal")
         m.update(genome=n["genome"], mid=n["mid"], note=m["gate"]["note"])
         if m.get("program") and m.get("inherited_gates"):
             m["mid"] = sha(m["mid"] + canon(m["inherited_gates"]))[:14]
+        cf = m.get("gate_control_file")
+        if cf:                       # gate_v3 (1109c-final): the matched wrong-content control, same keys, same program, same scope; the judge reads it beside the gate
+            try:
+                ca = json.load(open(cf))[0]["engine"]
+                if pe and canon(ca[:len(pe)]) != canon(pe):
+                    ca = list(pe) + ca
+                if not all(np.isfinite(np.array(e["value"], dtype=float)).all() for e in ca[len(pe):]):
+                    raise ValueError("control not finite")
+                cn = member(dict(parent["genome"], engine=ca), m.get("program"), origin="gate_control")
+                cmid = sha(cn["mid"] + canon(m["inherited_gates"]))[:14] if m.get("program") and m.get("inherited_gates") else cn["mid"]
+                m["gate_control"] = dict(name=f"{m['name']}~ctrl", mid=cmid, genome=cn["genome"], note=m.get("gate_control_note") or (self.HW.cfg(self) or {}).get("gate_control_note", ""), src=m.get("gate_control_src"))
+            except (OSError, ValueError, KeyError, IndexError) as e:
+                m["gate_control"] = dict(missing=f"{type(e).__name__}: {e}"[:200])
         return m
 
     def round(self, r):
+        self.cur_round = r                 # A1: write_gate reads the round its rule applies to
         from vrsi27.boost.edge import proposal_stats, learn_gain, atom_scores, select_stats
         from vrsi27.boost.meta import Population, board, parse_lens_code
         from vrsi27.boost.lens import lens_hash
@@ -3387,11 +4172,18 @@ class Run:
         a, S = self.a, self.state
         rd = f"{self.work}/r{r:03d}"
         os.makedirs(rd, exist_ok=True)
+        if self.c9:
+            self.HW.round_start(self, sys.modules[__name__], r)      # 1109c: anchor guard, W admission from the probe files, SELECT rotation
+        else:
+            self.c128_rotate(r)              # 128c split refresh (a): this round's SELECT; off without prereg c128 refresh "rotate"
         self.stage(r, "prompts")
         members = S["members"]
         REG.update({m["name"]: m for m in members})
         learn = self.data.learn
         self.ensure(members, learn)
+        if self.c9:                      # 1109c: each provisional member's e-process read on this round's (rotated) SELECT; a removed member leaves the pool here
+            self.c9_eproc = self.HW.confirm_reads(self, sys.modules[__name__], r, members)
+            members = S["members"]
         votes, tab, pool, sp, st = self.compute(members)
         ec, Cor = err_stats(pool, members, sp.fit)
         pop = Population(f"{self.work}/meta")
@@ -3422,6 +4214,8 @@ class Run:
                     raise Bad(f"repeat of {names_of.get(m['mid']) or 'an earlier proposal of this round'}")
                 if m.get("program"):
                     program_rows(self.data, m, self.data.of("score"), render=False)
+                self.a2_check(r, m, kids)
+                self.c128_scope_check(r, m)
                 seen.add(m["mid"])
                 m["name"] = f"r{r}s{q['slot']}_{m['mid'][:6]}"
                 row.update(own_ops=m.pop("own_ops", None), name=m["name"], ops=m["ops"], mid=m["mid"], d=m["d"], dim="high" if m["d"] >= HIGH_D else "low", why=m.get("why"), valid=True, status=None)
@@ -3461,10 +4255,12 @@ class Run:
         ask = dict(invalid_first=len(pending), repeat_first=sum(is_rep(x[2]) for x in pending))
         t_re = time.time()
         if pending and r >= active_amendment(self.work, r).get("reask_from", 10 ** 9):
+            a3_ = self.a3_assign(r, pending, kids)
             again = []
             for q, g, row in pending:
                 why_ = str(row["status"]).replace("invalid: ", "")
                 row["first_status"] = row["status"]
+                why_ = self.a3_why(a3_, q["slot"], why_)
                 extra = " Propose something different from it, on another cause or with another change." if is_rep(row) else ""
                 again.append(dict(q, id=q["id"] + "_re", user=q["user"] + f"\n\n## Your previous answer was rejected\nReason: {why_}.{extra}\nYour previous answer ended:\n{str(g.get('content'))[-3000:]}\n\nAnswer again in the same form."))
             rd2 = f"{rd}/reask"
@@ -3484,10 +4280,16 @@ class Run:
                 if g2:
                     q_ = dict(q, must=q.get("must"))
                     attempt(q_, g2, row)
+            self.a3_final(r, a3_, pending)
+            if a3_["colliding"]:
+                ask["a3"] = dict(a3_, assigned={str(s): k for s, k in a3_["assigned"].items()})
             left = [x for x in pending if not x[2]["valid"]]
             ask.update(invalid_after=len(left), repeat_after=sum(is_rep(x[2]) for x in left), secs=round(time.time() - t_re))
             self.say(f"r{r}: re-ask: invalid {ask['invalid_first']} (repeat {ask['repeat_first']}) -> {ask['invalid_after']} (repeat {ask['repeat_after']}), {ask['secs']}s")
         jdump(f"{rd}/reask.json", dict(ask, slots={str(x[2]["slot"]): x[2].get("first_status") or x[2]["status"] for x in pending}))
+        kids = self.c128_critic(r, rd, kids)        # 128c: the leakage critic before any engine time; off without prereg c128 critic
+        if self.c9:
+            kids = self.HW.critic(self, sys.modules[__name__], r, rd, kids)       # 1109c: denylist precheck + frozen-model LEAK critic
         # checkpoints; plain members go to the cards at once, gated writes run beside them
         for m, row in kids:
             self.ev.build(m["genome"])
@@ -3537,6 +4339,8 @@ class Run:
                             row["recite"] = self.recited(m, qm(m))
                         self.diag_stats(m, row)
                         self.review(r, rd, m, row, by[m["parents"][0]], set(qm(m)))
+                        if self.c9 and self.HW.cfg(self).get("early_a7"):      # amendment 11: its own stage-1 screen passes -> its A7 paired draw goes out now as a LOW (_se) line
+                            self.HW.early_draw(self, sys.modules[__name__], r, members, m, row, qm)
                 except Exception as e:
                     written.add(m["mid"])
                     self.say(f"  review {m.get('name')}: {type(e).__name__}: {str(e)[:150]}")
@@ -3560,9 +4364,21 @@ class Run:
         first, self.ev.pending = self.ev.pending, []
         plain = check([x for x in kids if not x[0].get("gate")])
         stage1(plain)
+        self.c128_request(r, kids, by, qm, q_full)      # 128c: the parents' band and null draws, beside stage 1
+        if self.c9:
+            self.HW.request_nulls(self, sys.modules[__name__], members)      # 1109c: every member's real re-seeded draws on score + SELECT
         fill(plain)
         keep, self.ev.pending = self.ev.pending, first
         self.ev.wait(self.say)
+        if self.c9 and gated:            # 1109c (fable_1109d patch 6): the note as a text prefix on its scope's show rows first; no write without a pass
+            gated = self.HW.prescreen(self, sys.modules[__name__], r, rd, gated, by)
+        if self.c9:                      # gate_v3 control pool (coordinator 11-09): every proposed gate note of this run, kept in state, in order seen
+            P_ = S.setdefault("c1109_gate_notes", [])
+            seen_ = {(x["cat"], x["note"]) for x in P_}
+            for m, _ in gated:
+                k_ = ((m.get("gate") or {}).get("scope") or "")[4:]
+                if k_ and (k_, m["gate"]["note"]) not in seen_:
+                    P_.append(dict(cat=k_, note=m["gate"]["note"], name=m["name"], round=r)); seen_.add((k_, m["gate"]["note"]))
         writes = [(m, row, by[m["parents"][0]], self.write_gate(m, by[m["parents"][0]])) for m, row in gated]
         self.ev.pending += keep
         # each write scores as soon as it is ready; nothing waits for the slowest
@@ -3623,16 +4439,15 @@ class Run:
             self.ev.prio = False
             fill(used_late)
             self.ev.wait(self.say)
-        wr = (len(done), len(writes), sum(1 for _, row, _, _ in writes if "did not reach" in str(row.get("status"))))
-        recites = []
+        raw = []
         for m, row in done:                  # nothing joins the pool unless the note really opens the thinking
             x = self.recited(m, qm(m))
             row["recite"] = x
-            recites.append(x if x is not None else 0.)
-            if x is None or x < .5:
+            raw.append(x)
+            if x is not None and x < .5:      # 1109c audit 11-09: a recite of None (no stage-1 rows in the key) is n/a, as the A1 note says, not a failure
                 row.update(valid=False, status=f"write: real generation recites {x}")
             self.say(f"  {m['name']} recites in generation: {x}")
-        rc = (sum(1 for x in recites if x >= .5), len(recites), float(np.median(recites)) if recites else None)
+        wr, rc = write_counts([row for _, row, _, _ in writes], len(done), raw)
         t3 = time.time()
         allk = list(kids)
         self.stop_dead(kids, lambda m, row: qm(m))
@@ -3682,7 +4497,11 @@ class Run:
                 self.say(f"  review {m.get('name')}: {type(e).__name__}: {str(e)[:150]}")
         self.ev.tick = None
         # stage 2: top by z2, the rest of LEARN
-        if r >= self.F:              # ranked by the cross-sample score, no gate here (GRADIENT_CHECK.md: z2>1 passes a model against itself)
+        if self.c9:                      # 1109c stage 1 (A1): fire gate + zx ranking, cap
+            top = self.HW.stage1(self, sys.modules[__name__], r, rd, members, have, qm)
+        elif r >= self.F and self.c128(r, "judge"):        # 128c stage 1: fired set against the null band; zx ranks; the parents' nulls go through it too
+            top = self.c128_stage1(r, rd, members, have, qm, by)
+        elif r >= self.F:              # ranked by the cross-sample score, no gate here (GRADIENT_CHECK.md: z2>1 passes a model against itself)
             top = self.pick_stage2(have, r)
             top = top + self.stage2_exempt(have, top, members, r, rd, qm)
             for m0 in (S.get("reserve") or []) if a.get("reserve") else []:
@@ -3703,6 +4522,7 @@ class Run:
         s2rows = lambda m, row: sorted(set(q_full) | set(self.data.of("select")) | ({i for i in (row.get("card_rows") or []) if i in self.data.role})) if rc_ else learn
         self.stage(r, "stage 2")
         self.read_rows = None
+        self.c128_request_s2(r, top)
         running = self.ev.fill_settle({m["mid"] for m, _ in top})
         self.ev.evaluate_many([(m, [i for i in s2rows(m, row) if i not in running.get(m["mid"], ())]) for m, row in top])
         self.ev.wait(self.say)
@@ -3787,8 +4607,25 @@ class Run:
                 ok = bool(ok and pool_ok)
             row["would_accept"] = bool(ok)
             self.say(f"  stage 2 {m['name']}: q {row.get('q_fit')} s {row.get('s_fit')} z_select {row.get('z_select')} ce select {row.get('ce_gain_select')} lb {row.get('ce_gain_select_lb')} dacc {row.get('dacc_select')} -> {'ACCEPT' if ok else 'no'}" + (f" | stacking lb {row.get('ce_gain_select_lb_stacking')} ce {row.get('ce_gain_select_stacking')} dacc {row.get('dacc_select_stacking')}" if fu0 is not None else ""))
-        chosen, steps = self.accept_in_order(members, top, r)
-        plateau_ = self.plateau_end(members, top, chosen, steps, r, rd) if self.plateau_on else None
+        c9_rec = None
+        if self.c9:                      # 1109c stage 2 on R: MemberCandidate + RRSI judge, Holm across candidates, greedy re-read, null void
+            dec = c128_rec = None
+            rj_ = self.HW.rejudge(self, sys.modules[__name__], r, members, by)       # 1109c amendment 2: earlier stage-2 candidates judged with empty nulls
+            for m_, row_ in rj_:
+                by[m_["name"]] = m_
+            top = list(top) + rj_
+            self.HW.request_nulls(self, sys.modules[__name__], members, top)      # amendment 5: with the candidates' seed-paired reads
+            self.ev.wait(self.say)
+            chosen, steps, c9_rec = self.HW.decide(self, sys.modules[__name__], r, rd, members, top, by, q_score) if top else ([], [], None)
+            if c9_rec:
+                pv_ = c9_rec.pop("_prov", {})
+                self.HW.admitted_reads(self, r, chosen, c9_rec, pv_.get("prov", ()), pv_.get("null_prov", ()))
+            plateau_ = None
+        else:
+            dec = self.c128_decide(r, members, top, by) if self.c128(r, "judge") and top else None
+            chosen, steps = self.accept_in_order(members, top, r)
+            c128_rec = self.c128_finish(r, rd, members, top, chosen, steps, dec) if dec is not None else None
+            plateau_ = self.plateau_end(members, top, chosen, steps, r, rd) if self.plateau_on and not self.c128_replaces(r) else None      # 128c: the combination test is an acceptance outside the judge
         accepted = chosen[0] if chosen else None
         # level 2: the meta child joins the lens population
         mg = gen.get("meta")
@@ -3819,13 +4656,16 @@ class Run:
         S["hist"] = hist + props
         if a.get("reserve"):
             kept = {m["mid"] for m in chosen}
-            S["reserve"] = [dict(m) for m, row in top if row.get("stage2_status") == "ok" and m["mid"] not in kept]
+            S["reserve"] = [dict(m) for m, row in top if row.get("stage2_status") == "ok" and m["mid"] not in kept and not row.get("null") and not row.get("confirm_of")]
         S["cross_pairs"] = S.get("cross_pairs", []) + [q["parents"] for q in reqs if q.get("op") == "cross" and len(q.get("parents", [])) == 2]
         tab2, pool2, sp2, st2 = tab, P, sp, st
+        votes2, a4_ = votes, self.a4(r)
+        if a4_:              # A4: the round line on the members alone; votes/tab above also hold the stage 2 candidates, whose answers moved the pool's columns and tie-breaks (r4 SELECT .755 -> .745, no member change). The increments keep their shared Table.
+            votes2, tab2, pool2, sp2, st2 = self.members_tables(members, votes)
         Fp = st2.cur.F
         fu_rec, Fs = {}, None
         if self.fusion != "stacking":
-            fu = fu0 or self.fz("fuse", self.fuser.fuse, members, votes, self.data, self.fusion, sp=sp2)
+            fu = (None if a4_ else fu0) or self.fz("fuse", self.fuser.fuse, members, votes2, self.data, self.fusion, sp=sp2)
             Fs, Fp = Fp, fu.F
             fu_rec = dict(fusion=self.fusion, pool_fit_stacking=tab2.acc(Fs, sp2.fit), pool_select_stacking=tab2.acc(Fs, sp2.select), table_columns=int(tab2.C), fusion_info={k: v for k, v in fu.info.items() if k in ("rows_in_em", "em_passes", "agree_share_fit", "agree_share_select", "passed", "T", "agree_floored", "no_vote_rows")},
                           fusion_secs={k: dict(calls=len(v), total=sum(v), max=max(v)) for k, v in self.fz_t.items()})
@@ -3849,8 +4689,10 @@ class Run:
         self.say(f"r{r}: dropped {len(dropped)} of {len(props)}: " + ("; ".join(f"{x['name']} {x['own_ops'] or ''}: {x['reason'][:160]}" for x in dropped) or "none"))
         rec = dict(round=r, members=len(members), err_corr=ec, pool_fit=fit_acc, pool_select=sel_acc, best_name=pool2.modules[best], best_fit=acc(best, sp2.fit), best_select=acc(best, sp2.select), stock_fit=acc(sk, sp2.fit), stock_select=acc(sk, sp2.select),
                    pool_gain_select=sel_gain, weights={m["name"]: float(w) for m, w in zip(members, st2.cur.w)}, err_pairs={f"{members[a_]['name']}|{members[b]['name']}": (None if np.isnan(Cor[a_, b]) else float(Cor[a_, b])) for a_ in range(n) for b in range(a_ + 1, n)},
-                   valid=sum(1 for p in props if p["valid"]), scored=sum(1 for p in props if p["scored"]), stage2=len(top), reask=ask, dropped=dropped, accepted=",".join(m["name"] for m in chosen) if chosen else None, accept_steps=steps, members_after=[m["name"] for m in S["members"]], secs=dict(prompts=t1 - t0, gen=t2 - t1, stage1=t3 - t2, stats=t4 - t3, stage2=time.time() - t4, total=time.time() - t0), rows_per_h_per_card=tps[0], cold_start_s=tps[2], engines=tps[3], writes_ok=wr[0], writes=wr[1], writes_no_recitation=wr[2], recite_ok=rc[0], recite_scored=rc[1], recite_median=rc[2], ops=dict(cnt))
+                   valid=sum(1 for p in props if p["valid"]), scored=sum(1 for p in props if p["scored"]), stage2=len(top), reask=ask, dropped=dropped, accepted=",".join(m["name"] for m in chosen) if chosen else None, accept_steps=steps, members_after=[m["name"] for m in S["members"]], secs=dict(prompts=t1 - t0, gen=t2 - t1, stage1=t3 - t2, stats=t4 - t3, stage2=time.time() - t4, total=time.time() - t0), rows_per_h_per_card=tps[0], cold_start_s=tps[2], engines=tps[3], writes_ok=wr[0], writes=wr[1], writes_not_reached=wr[2], writes_no_recitation=rc[3], recite_ok=rc[0], recite_scored=rc[1], recite_median=rc[2], recite_na=rc[4], ops=dict(cnt))
         rec["report_extras"] = xr
+        if c128_rec is not None:
+            rec["c128"] = {k: v for k, v in c128_rec.items() if k != "rows"}
         rec.update(fu_rec, views=views_of(tab2, pool2, Fp, members, self.data, dict(fit=sp2.fit, select=sp2.select), Fs))
         if self.fusion != "stacking":
             rec["weights_stacking"] = rec.pop("weights")
@@ -3860,7 +4702,16 @@ class Run:
         self.say(f"r{r}: exempted from the stage 2 zx filter, outcome: " + (", ".join(f"{x['name']} {x['stage2_status']} would_accept {x['would_accept']} rejected_by {x['rejected_by']} accepted {x['accepted']}" for x in rec["stage2_exempt"]) or "none"))
         self.say(f"r{r}: SELECT reads this round {rec['select_reads']}")
         if plateau_:
-            rec.update(select_increment=plateau_["select_increment"], plateau_end=plateau_["plateau_end"], combo=plateau_["combo"], plateau_secs=plateau_["secs"], plateau=self.weight_slots(r, reqs, props))
+            rec.update(select_increment=plateau_["select_increment"], plateau_end=plateau_["plateau_end"], plateau_after_combo=plateau_.get("plateau_after_combo"), combo=plateau_["combo"], plateau_secs=plateau_["secs"], plateau=self.weight_slots(r, reqs, props))
+        if self.c9:                      # 1109c: reflect (notes, <= 1 skill edit, policy challenger), skill lifecycle, P A/B
+            H_ = sys.modules[__name__]
+            rec["c1109"] = dict(decide={k: v for k, v in (c9_rec or {}).items() if k != "stage2"}, eproc=getattr(self, "c9_eproc", {}))
+            try:
+                rec["c1109"]["reflect"] = self.HW.reflect(self, H_, r, rd, props, kids)
+            except (RuntimeError, OSError, Bad) as e:
+                rec["c1109"]["reflect"] = dict(error=str(e)[:300])
+                self.say(f"r{r}: 1109c reflect failed (nothing written): {str(e)[:200]}")
+            rec["c1109"]["end"] = self.HW.round_end(self, H_, r, rd, reqs, props, chosen, dict(pool_S=sel_acc))
         S["rounds"].append(rec)
         S["round"] = r
         if plateau_:
@@ -3871,7 +4722,7 @@ class Run:
             rec["members_new_rule_only"] = [m["name"] for m in S["members"] if m.get("new_rule_only")]
             self.say(f"r{r}: accepted by the new narrow rule only: {rec['accepted_new_rule_only']}; all such members {rec['members_new_rule_only']}")
         rec["lines"] = len(self.line_report(r, rd, t0))
-        if self.fusion == "ds_agree":
+        if self.fusion in DS_MODES:
             rec["member_loo_fit"] = {x["name"]: x["loo_fit"] for x in (jload(f"{rd}/parent_scores.json", None) or [])}
             try:
                 self.fusion_side(r, rd, fu, members, votes)
@@ -3888,7 +4739,7 @@ class Run:
         cws = jload(f"{rd}/card_wrong.json", None) or []
         cw = (f"{np.mean([x['before'] for x in cws]):.2f}", f"{np.mean([x['after'] for x in cws]):.2f}") if cws else ("?", "?")
         mix = dict(collections.Counter(vh.class_of(self.data.rows[i]) or "other" for i in q_score))
-        self.say(f"ROUND {r}: members {len(members)} error corr {ec:.3f} | pool FIT {fit_acc:.3f} SELECT {sel_acc:.3f} | best single {pool2.modules[best]} FIT {acc(best, sp2.fit):.3f} SELECT {acc(best, sp2.select):.3f} | pool gain SELECT {100 * sel_gain:+.1f} | stock FIT {acc(sk, sp2.fit):.3f} SELECT {acc(sk, sp2.select):.3f} {xr.get('stock_text', '')}| pool FIT held out by picture {xr.get('pool_fit_oof')} | not stopped by bench {xr.get('not_stopped_text')} | valid {rec['valid']}/{len(props)} ops {dict(cnt)} stage2 {len(top)} accepted {rec['accepted']} | {rec['secs']['total'] / 60:.0f} min, gen {rec['secs']['gen'] / 60:.0f} stage1 {rec['secs']['stage1'] / 60:.0f} stage2 {rec['secs']['stage2'] / 60:.0f}; {tps[0]:.0f} rows/h/card, cold start {tps[2]:.0f}s over {tps[3]} engines; writes ok {wr[0]}/{wr[1]}, failed recitation {wr[2]}; generation recites {rc[0]}/{rc[1]}, median {rc[2]}; dim {dict(collections.Counter(p.get("dim") for p in props if p.get("valid")))} | card wrong {cw[0]}->{cw[1]} | score rows {mix}")
+        self.say(f"ROUND {r}: members {len(members)} error corr {ec:.3f} | pool FIT {fit_acc:.3f} SELECT {sel_acc:.3f} | best single {pool2.modules[best]} FIT {acc(best, sp2.fit):.3f} SELECT {acc(best, sp2.select):.3f} | pool gain SELECT {100 * sel_gain:+.1f} | stock FIT {acc(sk, sp2.fit):.3f} SELECT {acc(sk, sp2.select):.3f} {xr.get('stock_text', '')}| pool FIT held out by picture {xr.get('pool_fit_oof')} | not stopped by bench {xr.get('not_stopped_text')} | valid {rec['valid']}/{len(props)} ops {dict(cnt)} stage2 {len(top)} accepted {rec['accepted']} | {rec['secs']['total'] / 60:.0f} min, gen {rec['secs']['gen'] / 60:.0f} stage1 {rec['secs']['stage1'] / 60:.0f} stage2 {rec['secs']['stage2'] / 60:.0f}; {tps[0]:.0f} rows/h/card, cold start {tps[2]:.0f}s over {tps[3]} engines; writes ok {wr[0]}/{wr[1]}, did not reach unseen {wr[2]}, failed recitation {rc[3]}; generation recites {rc[0]}/{rc[1]} (n/a {rc[4]}), median {rc[2]}; dim {dict(collections.Counter(p.get("dim") for p in props if p.get("valid")))} | card wrong {cw[0]}->{cw[1]} | score rows {mix}")
 
     def ops_report(self, r, rd, reqs, props, top, chosen, kids):
         """Report only, read by nobody in the run: per operator, distinct candidates of this round proposed, built, changing answers, passing stage 1, FIT, SELECT, accepted. A candidate counts under its own operators, not its ancestors'. Reserves in stage 2 count apart. Then the gate members, and the side lines."""
@@ -4115,9 +4966,10 @@ class Run:
         L = collections.defaultdict(lambda: dict(wanted=0, answered=0, samples=0, not_stopped=0, empty=0, pending=0, failed=0, too_long=0, client=None, member=None))
         names = {self.ev.dir_of(m): m["name"] for m in list(REG.values()) + self.state["members"]}
         for f in glob.glob(f"{EVR}/ev/*/asked.jsonl"):
-            for l in open(f):
-                x = json.loads(l)
-                if x.get("cancel") or x["t"] < t0:
+            xs = [json.loads(l) for l in open(f)]
+            gone = {x["out"] for x in xs if x.get("cancel")}       # 1109c audit 11-09: a cancelled ask is not pending (the cancel is its own later record)
+            for x in xs:
+                if x.get("cancel") or x.get("t", 0) < t0 or (x["out"] in gone and not os.path.exists(x["out"])):
                     continue
                 c = L[self.ev.line_of(x) or x["out"]]
                 c["client"] = x.get("client")
@@ -4180,7 +5032,11 @@ class Run:
             if self.stop_count() >= PLATEAU_STOP:
                 return f"{PLATEAU_STOP} rounds with no accepted member whose raised weight slots built and ran rows"
         elif len(R_) >= 3 and not any(x.get("accepted") for x in R_[-3:]):
-            return "3 rounds with no accepted member"
+            alive = [n for n, c in (self.state.get("c1109_carry") or {}).items() if c.get("status") == "carried"]
+            if alive:                # 1109c audit 11-09: a round with an A8 carry still alive is active (its e-process is pending)
+                self.say(f"stop rule: 3 rounds with no accepted member, but A8 carries alive {alive}: not stopped")
+            else:
+                return "3 rounds with no accepted member"
         reads = {}
         f = f"{self.work}/report_learn.jsonl"
         if os.path.exists(f):

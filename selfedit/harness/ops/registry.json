@@ -1,0 +1,102 @@
+{
+ "_doc": "selfedit 1109c operator library O (design_1109c \u00a74). 'admitted' is written only by admit.py from the probe verdict files; a family that is not admitted gets 0 slots. 'wired' = the Run.round build path for it exists in this tree. 'op' = the slot operator name hboost uses.",
+ "families": {
+  "gate_write": {
+   "tier": "1a",
+   "op": "gate",
+   "probe": [
+    "P1"
+   ],
+   "rule": "P1 pass (>= +10 pp in scope). Amended 11-09 before the pilot: Q3 dropped from the rule and the text pre-screen turned off, because Q3 (step0/Q3/verdict.json) showed the pre-screen does not separate a good note from nulls (orbit +1.75 rows vs null +2.0); Q3 tested the pre-screen, not the write. Every gate_write member still faces the full J1 judge, nulls, Holm and LOBO.",
+   "wired": true,
+   "free_params": "note text, scope",
+   "off_scope": "gate member abstains outside its scope (load_member cut, SCOPE_ON)",
+   "admitted": false
+  },
+  "patch": {
+   "tier": "1c",
+   "op": "patch",
+   "probe": [
+    "Q1a"
+   ],
+   "rule": "Q1 arm a pass",
+   "wired": true,
+   "free_params": "patch size (vision setting)",
+   "off_scope": "global input-side edit; reported separately from mechanism edits (D7)",
+   "admitted": false
+  },
+  "cond_patch": {
+   "tier": "1b",
+   "op": "cond_patch",
+   "probe": [
+    "Q2n"
+   ],
+   "rule": "Q2 arm n pass",
+   "wired": false,
+   "free_params": "decision words, contrast",
+   "off_scope": "pi abstains where v_c.x is small",
+   "admitted": false
+  },
+  "cond_patch_self": {
+   "tier": "2a",
+   "op": "cond_patch_self",
+   "probe": [
+    "Q2s"
+   ],
+   "rule": "Q2 arm s pass",
+   "wired": false,
+   "free_params": "decision words, contrast=self",
+   "off_scope": "as cond_patch",
+   "admitted": false
+  },
+  "dir_ablate": {
+   "tier": "2b",
+   "op": "dir_ablate",
+   "probe": [
+    "P2"
+   ],
+   "rule": "P2 pass",
+   "wired": false,
+   "free_params": "contrast predicates",
+   "off_scope": "scoped through program",
+   "admitted": false
+  },
+  "proj_rank": {
+   "tier": "2c",
+   "op": "proj_rank",
+   "probe": [
+    "Q1b"
+   ],
+   "rule": "Q1 arm b pass",
+   "wired": false,
+   "free_params": "image predicate",
+   "off_scope": "Surgeon spec, bit-exact revert",
+   "admitted": false
+  },
+  "head_rescale": {
+   "tier": "3a",
+   "op": "head_rescale",
+   "probe": [
+    "Q4"
+   ],
+   "rule": "Q4 pass",
+   "wired": false,
+   "free_params": "none (heads from show-row attention)",
+   "off_scope": "per scope through pi",
+   "admitted": false
+  },
+  "kv_fix": {
+   "tier": "3b",
+   "op": "kv_fix",
+   "probe": [
+    "Q5"
+   ],
+   "rule": "Q5 pass",
+   "wired": false,
+   "free_params": "relation rows",
+   "off_scope": "per-request relation gate",
+   "admitted": false
+  }
+ },
+ "verdicts": {}
+}

@@ -1,0 +1,239 @@
+{
+ "_doc": "selfedit 1109c pre-registration (design_1109c \u00a76.2, \u00a79.2). Written and committed BEFORE the calibration replay ran; only 'rung' and 'calibration' are filled by the calibration test (strictest passing rung of J1-J3). Any other change voids it.",
+ "evidence_rows": "R = (score rows \\ this round's stage-1 draw) U SELECT \\ card rows of the candidate's lineage; ID and OOD never (no_id guard)",
+ "cards_from": "show",
+ "read": "refit DS pool (fusion of the run) without and with the candidate on one Table; FIT rows of R read on ds F_oof (picture-held-out), SELECT rows on F",
+ "S": "pool accuracy on R; C = mean generated tokens per answered sample (candidate vs parent) on R",
+ "delta": "RRSI calibrate (verbatim, z=2, sqrt2): evaluations = the incumbent pool on R_base = score\\draw U SELECT, base and each real re-seeded set (member -> its redraw j where it exists), rows covered by every substituted redraw",
+ "S_star": "the incumbent pool's S on the same R",
+ "rrsi_cfg": {
+  "beta0": 0.1,
+  "beta1": 10.0,
+  "w_s": 0.0,
+  "w_c": 15.0,
+  "w_n": 0.5
+ },
+ "ladder": {
+  "J1": {
+   "z": 1.96,
+   "q": 0.05
+  },
+  "J2": {
+   "z": 1.645,
+   "q": 0.05
+  },
+  "J3": {
+   "z": 1.28,
+   "q": 0.1
+  }
+ },
+ "pool_test": "picture-cluster bootstrap (2000) one-sided q-quantile of mean per-row CE gain on R > 0, AND mean accuracy change on R > 0, AND rows up > rows down (exact McNemar p reported)",
+ "global": "answers >= 90% of R and no gate scope / program; global members use the pool test only; scoped members also need fired-set z >= z* with net > 0",
+ "fired_z_sigma": "sqrt(mean_j sum_{i in F} d_null_j,i^2) over the parent's REAL re-seeded draws j (partial draws scaled by |F|/|F covered|); never from the candidate",
+ "no_harm": "R_m = sum (-paired)+ vs parent on m's rows of R <= mean_j R_j + 1.65 sqrt(mean_j R_j), R_j the parent's real redraws (scaled by coverage)",
+ "fire_gate": "|F| >= 8 fired rows on R",
+ "card_vs_unseen": "as code-128c",
+ "within_band_weight": "D4: a weight member (engine edits) with dS <= delta is admitted on RRSI novelty without the z line, flagged within_band, never claimed unless confirmed",
+ "stage1": "on the round's stage-1 draw rows x 2 samples: |F| >= 8 and net vs pool >= 1.65 * sigma, sigma as fired_z_sigma from the parent's real redraws on F (zero-centred band); zx ranks; a null's sigma comes from its parent's other real redraws, else itself",
+ "stage2_cap": "the run's prereg stage2 count, passers by zx",
+ "accept": "greedy by pool LB; after each accept every remaining admitted candidate is re-read against members + accepted and stays only if still admissible",
+ "null": "every REAL re-seeded draw of every member parent of the round enters as a candidate (stage 1 then stage 2, on the rows it covers, >= 150 rows of R); if any null is admissible, the round is void",
+ "eproc": {
+  "chunks": 4,
+  "chunk_by": "crc32('1109c|'+picture) % 4",
+  "dbar": "mean accuracy change per chunk",
+  "lambda_first": 0.1,
+  "lambda": "predictable sum(d)/sum(d^2) on earlier reads, clipped [0, .5]",
+  "confirm_E": 20
+ },
+ "C1": "r1s0_968929 admitted in r1 and r2s11_583f9e admitted in r2 (r1s0 not displaced unless r1s11 also admitted and r1s0 still admitted)",
+ "C2": "every real re-seeded null is not admissible in every round",
+ "C3": "max over every stage-2 record (nulls and candidates) of the picture-cluster sign-flip size (2000 flips) of its full admission test <= .05",
+ "C4": "no menu weight candidate (scale, skip, attn_temp, vision_scale, direction) reaches eproc status confirmed",
+ "no_stubs": "coordinator 11-09: only real re-seeded draws; which ones were used is listed in the calibration result",
+ "rung": "J1",
+ "calibration": {
+  "run": "/data/fd/mingdazhang/selfedit/rsi/mm/hb/res_test/cal1109c_2",
+  "a1": true,
+  "result_sha256": "0d218ced63e9ffc9ff0f388611d614e95d1a3677f0c275f015c7ba118cea05c1",
+  "C": {
+   "J1": {
+    "C1": true,
+    "C2": true,
+    "C3": true,
+    "C3_max_size": 0.0375,
+    "C4": true,
+    "passes": true
+   },
+   "J2": {
+    "C1": true,
+    "C2": true,
+    "C3": true,
+    "C3_max_size": 0.0375,
+    "C4": true,
+    "passes": true
+   },
+   "J3": {
+    "C1": true,
+    "C2": true,
+    "C3": false,
+    "C3_max_size": 0.077,
+    "C4": true,
+    "passes": false
+   }
+  },
+  "strictest_passing": "J1",
+  "nulls_used": [
+   {
+    "parent": "stock",
+    "src": "sidecheck/stock4 samples 2,3",
+    "rows": 768,
+    "draw": 4
+   },
+   {
+    "parent": "stock",
+    "src": "sidecheck/stock4 samples 0,1",
+    "rows": 768,
+    "draw": 6
+   },
+   {
+    "parent": "r1s0_968929",
+    "src": "step0/B/r1s0_968929/s202",
+    "files": [
+     "a.r1s0_s202_a0.jsonl",
+     "a.r1s0_s202_a1.jsonl",
+     "a.r1s0_s202_a2.jsonl"
+    ],
+    "rows": 297,
+    "draw": 8
+   },
+   {
+    "parent": "r2s11_583f9e",
+    "src": "step0/B/r2s11_583f9e/s202",
+    "files": [
+     "a.r2s1_s202_a0.jsonl",
+     "a.r2s1_s202_a1.jsonl",
+     "a.r2s1_s202_a2.jsonl",
+     "a.r2s1_s202_b0.jsonl"
+    ],
+    "rows": 397,
+    "draw": 8
+   }
+  ],
+  "nulls_missing": [
+   "step0/B/stock/s202",
+   "step0/B/stock/s303",
+   "step0/B/r1s0_968929/s303",
+   "step0/B/r2s11_583f9e/s303"
+  ],
+  "first_run": "cal1109c_1 (pre-A1): no rung passed; C1 failed at the stage-1 band",
+  "note": "r2s11 admitted in r2 inside delta (0.087, 257 rows, partial r1s0 redraw) through the RRSI cost branch; C4 is weak in replay (one read, no rotated SELECT); 11 stage-2 picks could not be read (never answered on R live)"
+ },
+ "a1": {
+  "_doc": "Amendment A1, written and committed after cal1109c_1 (no rung passed) and BEFORE cal1109c_2. Root cause of the C1 failure: stage 1's pass band on the 105-row draw (x2 samples) rejected r1s0 (net +6.0 vs thr 6.06) and r2s11 (+1.0 vs 4.87), while stage 2 on R admitted both at J1 with every real null failing. Stage 1 spends its own size on rows that R then discards, so two cascaded 5% tests leave little power. A1 makes stage 1 what \u00a76.2 item 2 calls it ('zx is a ranking only') and moves the multiplicity into stage 2, where it is controlled family-wise.",
+  "stage1": "fire gate only (|F| >= 8 fired rows on the draw); the round's top stage2_cap candidates by zx go to stage 2; the zero-centred band is computed and logged, not used",
+  "stage2_pool_line": "Holm-Bonferroni (VideoHarness-RSI stats.holm_bonferroni, verbatim) across the round's non-null stage-2 candidates on their one-sided picture-cluster bootstrap p of mean CE gain on R; the pool line holds iff p_holm <= alpha (J1, J2: .05; J3: .10). Every other line (dacc > 0, up > down, z for scoped, no-harm, fire gate, card, critic, RRSI floor and cost rule, D4) unchanged",
+  "reread": "after each accept the remaining candidates are re-read against members + accepted, and the re-read p is multiplied by the same Holm factor the candidate had",
+  "nulls": "each null tested alone, unadjusted, at the per-candidate LB rule (stricter for C2)",
+  "C3": "max over rounds of the family-wise sign-flip size (2000 flips, one sign per picture shared across the round's candidates) of the round's stage-2 admission decision <= .05; per-record unadjusted sizes are reported beside it",
+  "unchanged": "C1, C2, C4, R, the read, delta, the ladder's z* and alpha"
+ },
+ "a2": {
+  "_doc": "Amendment A2 (fable_1109d \u00a71.3 item 2, patch 2; astra 1109d delta coverage). Written and committed BEFORE cal1109c_3.",
+  "branch": "the RRSI cost rule takes the gain branch whenever the Holm pool line passes (p_holm <= alpha) and dS > 0: judge delta = min(delta, dS - 1e-9); the shaped branch stays only for D4 within-band weight members",
+  "delta_rows": "delta from rows covered by every substituted real redraw only when >= 150; else the last such delta; else the bootstrap sd of the base read (RRSI calibrate on one evaluation); delta_rows logged"
+ },
+ "a3": {
+  "_doc": "Amendment A3 (fable_1109d \u00a71.3 item 3, patches 1 and 3): sequential path for scoped members, per-fired-cluster betting.",
+  "provisional": "a scoped (non-global) member that fails the full J1 but passes fired >= 8, no-harm, card, critic, dS > 0, up > down and fired z >= 1.28 with net > 0 is provisional: no vote, not a parent",
+  "reads": "each later round: its own answers and its seed-paired draw 3 on that round's rotated SELECT rows it answers (x4 samples); one bet per fired picture-cluster, d = mean accuracy change on the cluster's fired rows",
+  "eproc": "E = prod (1 + lambda d) over bets in order; lambda predictable sum d / sum d^2 on earlier bets, clipped [0, .6], first .2; confirmed at E >= 20; removed at E < 1 after 3 reads or after 5 reads unconfirmed",
+  "status": "confirmed provisional -> joins the pool; admitted members are tracked the same way (confirmed claim; removed -> leaves the pool); scoped nulls that pass the provisional line are tracked; a confirmed null voids that round's confirmations and moves its parent's draws to the next epoch",
+  "power": "sim (tests/t_1109c_judge): p_up .8 confirms within 20 bets .60, within 40 .89; null over 100 bets reaches E >= 20 at .026"
+ },
+ "a4": {
+  "_doc": "Amendment A4 (fable_1109d patches 15, 16): LOBO transfer read and bench_specific tag.",
+  "lobo": "for each bench b of R: pool without and with the candidate refit with every FIT row of b left out, read on b's R rows with F",
+  "band": "per bench: max(1.65 x RMS of the same LOBO increment of the parent's real redraws (>= 50 covered rows), 2 rows of the bench)",
+  "guard": "sum over benches of LOBO row gains > 0 (rejects otherwise)",
+  "tag": "bench_specific if any bench's LOBO increment < -band, or a program reads the bench/category or a row-id prefix or names a bench, or a gate scope is cat:/bench:; admitted, votes on ID, reported apart, no headline, no skill credit"
+ },
+ "a5": {
+  "_doc": "Amendment A5 (fable_1109d patch 13): mechanism-level fusion cells (res_fuse.MECH on): back-off fine (bench|category|kind) -> mechanism cell (kind | n options | n images | question type by regex) -> member overall, kp 10 at each level; a bench with no EM fit row shrinks member reliabilities toward the member average with kp 50. Off: res_fuse byte-identical to code-128c."
+ },
+ "menu": {
+  "_doc": "fable_1109d patch 4: proposer operators = program, tokens, cross (recombination of members) + admitted W families (patch/kernel when admitted; gate when admitted); scale, skip, attn_temp, vision_scale, direction, verbosity, tune leave the menu (proposals using them are rejected 'operator not available'); they stay in the grid side table"
+ },
+ "prescreen": {
+  "_doc": "fable_1109d patch 6: before any gate write, the note as a text prefix on its scope's show rows x4 (samples 0,1 + draw 3) vs the bare parent x4 paired by seed; write only at net >= +3 rows and no row down by >= 2 of 4",
+  "status": "OFF (amendment 11-09, before the pilot, coordinator decision): Q3 failed (orbit prefix +1.75 rows vs null +2.0 on blink show rows x4), so the screen does not separate notes from nulls. gate_write is admitted on P1 alone; acceptance is unchanged (J1 judge, nulls, Holm, LOBO). Code: c1109 field prescreen=false skips hw_round.prescreen."
+ },
+ "amendments": [
+  {
+   "date": "2026-11-09",
+   "before": "pilot p1109c launch",
+   "change": "gate_write admission rule P1+Q3 -> P1 alone; text pre-screen off",
+   "reason": "Q3 verdict: pre-screen does not separate notes from nulls (+1.75 vs +2.0); Q3 tested the screen, not the write",
+   "acceptance": "unchanged: full J1 judge, nulls, Holm, LOBO"
+  },
+  {
+   "date": "2026-11-09",
+   "before": "pilot round 2 (driver stopped mid r2 proposals, restarted inside r2)",
+   "change": "bug fixes, no gate changed: (1) null draws answer at their own seed: the draw seed goes on the line --seed (code-xf cards ignore an item seed_off, so every draw ran at the base seed 101, was refused by its stamp, and every member had 0 null rows: no sigma, no harm bound, delta 0, z and no_harm failed for every candidate); draw file names carry the seed; a refused file no longer counts as answered in the ledger. (2) stock pairing: the pool read stock from paper128b stored answers made in another batch (a same-seed re-read now reproduces 62% of answers and is 2.9 pp lower on the paper128b SELECT rows, 0.3 pp on score), so stock is re-read in this run at seed 101 (the 528 score+select rows the base-seed draw lines produced, copied; show rows asked again); the stored link is kept as ev/aefc601d4c18b9.stored_paper128b. (3) the proposer prompt states the leakage precheck rule (3 of 12 r1 slots lost to it unwarned).",
+   "reason": "r1 accepted nothing because the null reads were empty (code-xf seed), and stage-2 compared fresh candidate reads with a stored parent read from another batch",
+   "acceptance": "unchanged: J1, Holm, nulls, no-harm, LOBO, precheck"
+  },
+  {
+   "date": "2026-11-09",
+   "before": "pilot round 2 decide",
+   "change": "re-judge: r1's stage-2 candidates r1s8_7638cc, r1s7_5f3ea2, r1s10_a0ac21 (judged with empty nulls) are rebuilt from their stored proposals and judged in r2's stage 2 with the fixed nulls and the run-time stock read (HW.rejudge, state c1109_rejudge, once). r1s11_80c605 is not re-judged: it stopped at the stage-1 fire gate (7 fired rows < 8), which does not use nulls.",
+   "reason": "coordinator 11-09: do not throw away candidates judged under the null bug",
+   "acceptance": "unchanged; they enter r2 Holm family"
+  },
+  {
+   "date": "2026-11-09",
+   "before": "pilot round 2 decide (driver restarted inside r2 stage 1)",
+   "change": "null_ref: the stage-2 reference pool is pool + one real redraw of the parent (draw 4; a null is read against pool + the other redraw); that redraw leaves the sigma / no-harm nulls (MC.NULLREF, c1109 null_ref true)",
+   "reason": "paired calibration cal1109c_5p (stock base = run-time re-read): a pure parent redraw raised the fused pool (stock nulls LB95 +.005..+.009, dS +1..+2 pp) and r1s0 nulls were admitted (C2 fail); the stored-read luck had hidden this ensembling gain",
+   "acceptance": "tightening",
+   "calibration": "cal1109c_6pn (paired + null_ref): J1 C1 False (r1s0 admitted +5.9 pp; r2s11 dS +2.1 pp p_holm .085 not admitted) C2 True C3 True (max .0405) C4 True; J2 same; J3 C1 True C3 False (.071). Strictest passing rung: none. Full run is NO-GO until power is addressed."
+  }
+ ],
+ "a6": {
+  "_doc": "Amendment 6, IN FORCE from 2026-11-09 ~15:25 CST (owner approval \"\u540c\u610f\", relayed by the coordinator), written before cal1109c_8. Flags: c1109 a6, cal CAL_A6 / CAL_A6C. Root cause: a null was judged by the pre-A2 rule (pool LB, then the shaped cost branch whenever dS <= delta), which no non-weight candidate faces under A2; the sign of its token change then decided it. Cheaper nulls were admitted (pilot r2 stock~d4: p .046, dC -2.7 %, voided r2s8 at Holm .0045, dS +.054); dearer nulls with stronger evidence were not (6pn r1 stock~d4 p .011; cal 7 r1 stock~d4 p .0085, r2 r1s0~d9 p .042). Any admissible null then voided every admit, whatever its evidence.",
+  "null_rule": "(a) a null is judged by the candidate rule: A1 pool line with its own unadjusted bootstrap p as a family of one (p <= alpha), A2 branch, every other guard unchanged (tightening: more nulls admissible)",
+  "void": "(b) an admissible null voids an admitted candidate unless the candidate beats it: on the R rows both read, per-row CE gain of the candidate minus that of the null, one-sided picture-cluster bootstrap p <= alpha of the rung, and mean accuracy change above the null's; every admissible null of the round is a bar for every admit; in acceptance order, an admit after a void admit is void (its read assumed it). A null admission still moves its parent's draws to the next epoch. The sequential-path void (A3/A5) is unchanged.",
+  "size": "admit-and-survive is a subset of admit, so the family-wise size stays <= the C3 sign-flip size (unchanged); a bias shared by candidate and null cancels in the paired difference (tests/t_a6: .053 / .037 at shared bias 0 / +.02, 300 sims)",
+  "C": "C1 and C3 unchanged. C2 (redefined, owner-approved): the null admission rate over all stage-2 null reads of the rung, pooled across rounds (plus confirmed nulls of the sequential path), has an exact one-sided 95% binomial (Clopper-Pearson) upper bound <= alpha of the rung; replaces 'no null admissible in any round'. C4 (redefined, owner-approved): only members the run tracks (admitted, provisional, null) count: no menu weight candidate among them reaches eproc status confirmed; an untracked stage-2 record's single-read status is reported, not judged.",
+  "rationale": "C2: a calibrated per-null 5% test fails 'zero admissions over ~24 reads' about 70% of the time (cal 7 passed only because both p<.05 nulls were dearer in tokens); a rate bound is the size statement. C4: in the run an e-process exists only for tracked members (hw_round admitted_reads / confirm_reads); cal 7's C4 failure was r4s6_3c62ca, never tracked (z 1.01 < 1.28, not admitted), first-read E 24.6. Note at writing: with n null reads and k admissions the bound is <= .05 only if n >= 59 at k = 0 (n >= 93 at k = 1); cal 7 has 24 null reads per rung.",
+  "C2_operational": "coordinator decision 11-09 (after cal1109c_8): the approved 'null admission rate <= alpha' is tested as a calibration test: C2 FAILS iff the one-sided exact binomial P(X >= k | n, alpha) < .05, k = admitted nulls, n = all stage-2 null reads of the rung pooled over rounds (cal CAL_C2=binom). Rationale (coordinator): the upper-bound form is infeasible below ~59 reads and so tests nothing. Builder note: this form was fixed after cal1109c_8 failed the upper-bound form (2/24 admitted, bound .240); it passes 2/24 (P = .34) and fails only from k = 4 of 24 (P = .03).",
+  "b_rule": "coordinator decision 11-09: (b) dominance void is kept only if, after the beats_null fix (candidate re-read on the null's own reference pool), A6-with-(b) power >= .8 at +5 pp AND C1 passes on the cal 7 draws; else A6 (a) only (c1109 a6b false, cal CAL_A6B=0), (b) recorded as tested and dropped.",
+  "C1_operational": "owner approval relayed by the coordinator ('\u540c\u610f', 11-09 ~16:05 CST): C1's positive control is the synthetic injected-effect power check in place of r2s11: PASS iff power at +5 pp >= .80 under the run's exact config. Reason: r2s11's +2 pp is indistinguishable from the parent redraw r1s0~d9 (p .042) under the A6 (a) null rule, so it is not a valid known positive. C2 (binomial-test form), C3, C4 (tracked members) as in cal1109c_9.",
+  "result_1109": "cal1109c_9 (A6 (a) only, C2 binom) J1: C1(r2s11) False, C2 True (2/24, P(X>=2|24,.05) .339), C3 True (.0455), C4 True. cal1109c_9b (A6 (a)+(b), beats_null fixed) J1: same C2-C4; r1s0 kept (beats stock~d4 p .002), r2s11 void (p .163). Power at +5 pp (pow_a6f, 200 seeds, round-1 nulls: stock~d4 admissible p .0085): A6 with (b) .100, A6 (a) only .000; +8 pp: .995 / .000. C1_operational FAILS for both configs: NO-GO, full run not launched.",
+  "status": "SUPERSEDED by a6p (11-09 ~16:30 CST): A6 (a)/(b) tested and dropped for zero power (see a6p.dropped)"
+ },
+ "a6p": {
+  "_doc": "Amendment 6' (coordinator decision under the owner's standing authorisation to launch, 11-09 ~16:15 CST), IN FORCE for the full run; written before cal1109c_10. The full run uses A5 plus this one narrow fix. Flags: c1109 a6p true, cal CAL_A6P=1.",
+  "rule": "nulls keep the pre-A6 judgement (A5 path). An admissible null voids the round only if it was admitted on the gain path (dS > the judge's delta). A cost-path null admission (dS within delta, admitted on the shaped branch because the redraw was cheaper) voids nothing; it is logged and its parent's draws still move to the next epoch. It is the pilot r2 defect: stock~d4 (dS +.0165 < delta .054, cost path) voided r2s8 (Holm .0045, dS +.054).",
+  "criteria": "C1 = C1_operational (synthetic injected-effect power >= .80 at +5 pp under the run's config); C2 = binomial-test form (a6.C2_operational); C3 as written; C4 = tracked members only (owner-approved, see a6).",
+  "dropped": "A6 (a) (nulls by the candidate rule) and (b) (dominance void) were tested and dropped for power. At +3/+5/+8 pp (pow_a6f, 200 seeds): with (b), after the beats_null fix, 0/.100/.995; (a) only 0/0/0. Under the candidate rule a pure stock redraw is admissible (stock~d4 p .0085), so the gate admits the fresh-draw ensemble bonus, and a test against such a null has about no power.",
+  "limitation": "known limitation: the ensemble bonus of a fresh redraw (null_ref absorbs part of it) is not removed by the gate. Under A6' a cost-path null is not taken as evidence against gain-path admits.",
+  "headline": "every headline claim rests on the frozen held-out ID (128/bench) and OOD (ood128_v2) evaluations vs stock AND vs stock self-consistency at matched samples. The gate never sees these, so a gate false admit cannot inflate the reported result.",
+  "verification": "cal1109c_10 (cal 7 draws, A6', C2 binom, C4 tracked): J1 PASS (r1s0 r1 and r2s11 r2 admitted as in cal 7; 0 of 24 null reads admitted, no cost-path null; family size max .0455 (rounds .0205/.0365/.026/.0455/.0245); C4: no tracked menu confirmation, untracked r4s6 reported); J2 PASS; J3 C3 .0795 fail. Power under A6' at 128 rows (pow_a6p, 200 seeds): +0 .000, +3 .950, +5 1.000 (Holm x3 1.000), +8 1.000; the round-1 stock~d4 null is not admissible on the pre-A6 rule. Pilot r2 replay (a6_pilot.py, reproduces the logged dS/p): stock~d4 is a cost-path null, so r2s8 would be admitted.",
+  "rows": "owner-directed 11-09 ~16:20 CST ('\u6211\u4eec\u8fdb\u5316\u7684\u9898\u76ee\u4e0d\u9700\u8981\u5f88\u591a\uff0c\u53ef\u4ee5\u53ea\u670964\u90fd\u53ef\u4ee5\uff0c\u52a0\u5feb\u901f\u5ea6\u4e00\u4e0b', relayed by the coordinator): LEARN rows per bench 64 (20/28/16) if A6' power >= .80 at +5 pp and C3 <= .05 there, else 96, else 128 (fixed seeded picture subset, mk_sub.py, seed sub1109; ID and OOD unchanged). Power at +5 pp: 64 rows .750, 96 rows .450 (pow_s64/pow_s96, 200 seeds, A6'; the sub-row C3 replay was not completed: stage-1 draw rows fell outside the subset). Neither passes, so the run uses 128 rows.",
+  "status": "superseded by a7 for the full run (11-09 ~17:00 CST); a6p's gain-path tripwire is kept inside a7"
+ },
+ "a7": {
+  "_doc": "Amendment 7 (owner 11-09 ~16:50 CST '\u5982\u679c\u68c0\u9a8c\u89c4\u5219\u6709\u95ee\u9898\u7684\u5730\u65b9\uff0c\u5c31\u5e94\u8be5\u53ca\u65f6\u7684\u8c03\u6574', relayed by the coordinator; design = /Users/admin/selfedit/fable_1109_rsi_weights.md \u00a71.2, \u00a73). Written and committed BEFORE the T3 re-judge is looked at. Flags: c1109 a7, cal CAL_A7.",
+  "member_track": "PRIMARY admission for every stage-2 candidate: per row of R (as now: score \\ stage-1 draw U SELECT, lineage cards removed, never ID/OOD) D_i = right rate of the candidate's 4 samples (0,1 + its seed-paired draw 3) minus the parent's 4 samples (0,1 + its draw 3), same seeds; NO_RUN / unparsed = wrong. Statistic mean D; one-sided picture-cluster sign-flip p (one sign per picture, B 2000); Holm across the round's <= 3 stage-2 candidates; admit iff p_holm <= .05, mean D > 0, rows up > rows down, no-harm (parent-redraw bound), card-vs-unseen, critic, RRSI cost rule on the gain branch (A2) with dS = mean D. No pool term in the admission.",
+  "scoped": "scoped members (gate writes; programs with input-only triggers): the member track on their scope rows plus fired-z >= 1.96 as now; an off-scope-abstaining gate write keeps the pool line as its admission read with fired-z + A3; scope < 48 R rows -> provisional (A3, E >= 20 on rotated SELECT), unchanged.",
+  "pool_line": "secondary, logged (pool_dS, pool_p; pool_score.read_R with null_ref); never a veto except for off-scope abstainers. A member admitted on the member track enters the pool whatever its pool_dS.",
+  "nulls": "calibrate, never veto: sigma for fired-z, the no-harm bound, delta (A2 rows), one parent redraw in the pool reference (null_ref). Every parent redraw pair is also read on the member track against its parent; its p enters a running tally. Monitor: C2 binomial form over all null reads so far; if P(X >= k | n, .05) < .05 acceptance freezes for the round and sigma/delta are re-estimated on fresh draws. Tripwire (A6'): a null whose member-track gain exceeds delta voids the round's admits. No other void.",
+  "stage2_cap": "3, ranked by stage-1 zx",
+  "winners_curse": "report dS_admit beside dS_confirm (A3 e-process on later rotated SELECT, and the final held-out read)",
+  "headline": "compute-matched only: final lineage-tip model x4 vs stock x4 (same seeds), and final pool (k members x 2 samples) vs stock self-consistency x2k, on ID 128/bench and ood128_v2, read once at the end; neither is read during the search",
+  "harness_ab": "fable \u00a73: per-proposal quality q (member-track mean paired gain if it reached stage 2, else stage-1 zx; both raw) logged one row per proposal in c1109_round_end.json {round, slot, side, op, used_notes, used_skill_id, ledger_on, policy_side, q_s1, q_s2, admitted, bench_specific}; slot-parity A/B windows of 2 rounds, one component at a time: r3-4 reflection notes (odd slots on), r5-6 skills block, r7-8 P challenger (W 6->2, program 4->8), r9-10 machine ledger, r11-20 winners on; decision per window one-sided Wilcoxon on q, alpha .10; skills probation->active on q (p <= .10 over >= 6 uses), retired at <= 0 over 12",
+  "go": "T1 member-track nulls calibrated (KS p > .1 and the share at p <= .05 inside the binomial 95% band of 5%) AND T2 power >= .80 at +5 pp with Holm x3 (C1_operational); C3 = sign-flip size of the member-track Holm rule <= .05; then launch with the smallest LEARN row count that passes (owner row reduction)",
+  "unchanged": "rung J1, A1 Holm, A2 gain branch, A3 sequential path, A4 LOBO tag, A5 4-sample reads and mech cells, null_ref, C4 tracked members"
+ }
+}

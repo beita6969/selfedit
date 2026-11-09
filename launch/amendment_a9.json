@@ -1,0 +1,6 @@
+{
+ "_doc": "Amendment 9 (coordinator 11-09 ~21:00 CST, root cause: 1109c plan() deals only program / cross / admitted W families (gate, patch); 'tokens' sat in the menu (MENU_BASE) but no slot ever named it, and no proposer used it in r1-r3 (ops: gate, patch, program only); 'verbosity' had left the menu (fable_1109d patch 4). Stock in 1109c is genome vision None (processor default), not 8192/2048. paper128b r1s0_968929 (tokens 8192/2048) is the largest proven held-out gain (ID 59.6 -> 69.7). Kept outside harness/frozen (run anchor).",
+ "rule": "c1109 a9: knob_ops (tokens, verbosity) join the proposer menu; plan() gives knob_min = 2 slots per round to them in turn (one tokens, one verbosity), taken from the last program slots of the dealt plan; the slot prompt carries the grid's cells for that op (r1 stock grid, reused while stock is the only member).",
+ "judge": "unchanged: stage 1 fire gate + zx, stage 2 A7 member track (Holm <= 3), A8 carry e-process; knob members are global (no program, no gate scope).",
+ "effective": "r3/r4 boundary of p1109c_full (boundary_a9.sh: gpu stop after r4 starts, prereg c1109 a9 = true, prereg.pre_a9.json kept, resume); a8 and batch_rows 50 stay."
+}

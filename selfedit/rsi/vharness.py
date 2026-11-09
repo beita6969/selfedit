@@ -274,13 +274,16 @@ class OP:
     """validate(p, parent) gives (child genome change, d). d = free parameters this edit changes, reported in the ledger and story, used for nothing else."""
 
 
+STOCK_MAX_TOKENS = 16384      # Qwen3.8-27B preprocessor longest_edge 16777216 px / (16 * 2)^2: the stock per-image token cap
+
+
 def op_patch(p, g):
     v = dict(g["vision"] or {"patch": 16, "kernel": "box", "max": None, "min": None, "merge": 0})
     ps = ch(p.get("patch"), "patch", among=[4, 8, 5, 11])
     k = ch(p.get("kernel", "box"), "kernel", among=["box", "bilinear", "bicubic"])
     if k == "box" and 16 % ps:
         raise Bad("box needs a patch size dividing 16")
-    v.update(patch=ps, kernel=k, max=v["max"] or 4096)
+    v.update(patch=ps, kernel=k, max=v["max"] or STOCK_MAX_TOKENS)      # 1109c audit 11-09: keep the stock token cap (was 4096: a patch-8 image was cut to 1.05 MP vs 16.7 MP stock)
     return dict(vision=v), 2 if k != "box" else 1
 
 
