@@ -1319,7 +1319,7 @@ class Ev:
         m = self.model(g)
         if os.path.exists(f"{m}/config.json"):
             return
-        cmd = f"python -u rsi/vision_patch.py --model {vh.STOCK} --out {m} --patch {v['patch']} --kernel {v['kernel']} --max-tokens {v['max'] or 4096}"
+        cmd = f"python -u rsi/vision_patch.py --model {vh.STOCK} --out {m} --patch {v['patch']} --kernel {v['kernel']} --max-tokens {v['max'] or vh.STOCK_MAX_TOKENS}"
         cmd += f" --min-tokens {v['min']}" if v.get("min") else ""
         cmd += f" --merge {v['merge']}" if v.get("merge") else ""
         self.submit(f"ck_{sha(canon(v))[:10]}", cmd, [f"{m}/config.json"], f"{m}.failed")
@@ -1896,7 +1896,8 @@ def grid_edits(parent, rng):
         for sign in (1, -1):
             E.append(dict(op="verbosity", name=str(n), first=56, last=63, writer="mlp", alpha=sign * float(rng.choice([.5, 1, 2]))))
     E += [dict(op="patch", patch=p, kernel=k) for p, k in ((4, "bilinear"), (5, "bicubic"), (8, "box"), (11, "box"))]
-    E += [dict(op="tokens", max=x, min=y) for x, y in ((1024, 0), (2048, 0), (4096, 3600), (8192, 2048))]
+    E += [dict(op="tokens", max=x, min=y) for x, y in ((16384, 1024), (16384, 2048), (16384, 3600), (16384, 4096))]       # 1109c-final 11-10: min varies at the stock max (the old cells all capped max <= 8192, downscaling large images)
+    E += [dict(op="tokens", max=8192, min=2048, label="downscale (max below stock 16384)")]
     E += [dict(op="tune", edit=i, factor=f) for i in range(min(2, len(g["engine"]))) for f in (.5, 1.5)]
     out, seen = [], set()
     for k, e in enumerate(E):
@@ -4674,6 +4675,8 @@ class Run:
         n = len(members)
         acc = lambda k, idx: float(pool2.correct[k, idx].mean())
         fit_acc = tab2.acc(Fp, sp2.fit); sel_acc = tab2.acc(Fp, sp2.select)
+        if n == 1:                   # 1109c-final 11-10: a one-member pool is that member's plurality (the fused column relabelled stock: .660 vs .618)
+            fit_acc, sel_acc = acc(0, sp2.fit), acc(0, sp2.select)
         best = max(range(n), key=lambda k: acc(k, sp2.fit))
         sk = pool2.modules.index("stock")
         sel_gain = sel_acc - acc(best, sp2.select)

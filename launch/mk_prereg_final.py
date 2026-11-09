@@ -27,10 +27,14 @@ F = dict(
              r1_rejudge="r1s9_ddacd4, r1s6_790728, r1s3_93731d (r1's saved stage-1 table under the new screen, top 3 by zx) go into state c1109_rejudge and are read in r2's stage 2 with r2's Holm family (amendment-2 path: rebuilt from their stored proposals, cached rows not re-asked)",
              early_a7="a candidate passing its own screen during the stage-1 wait gets its A7 paired draw asked at once as a LOW (_se) line through the same evaluate_many request as request_nulls (same member, rows, chunking, out file, line seed), so the later request waits on that same line: answers asked once, identical by construction (tests/t_a11.py); stage 1 does not wait on it",
              stay_max="card code code-xf/rsi/hboost.py STAY_MAX 3600 -> 14400 s (scheduling only; stay_max_4h.sh, commit c7dab7e, applied 2026-11-10 01:58:37 CST, sha d6ed5661 -> 62e037e3)",
+             tokens_fix="supervisor + coordinator 11-10: the tokens grid cells all capped max <= 8192 (1024/0, 2048/0, 4096/3600, 8192/2048), downscaling every larger image vs stock max 16384; r1s6 and r1s9 ran at max 4096 min 3600. Fix: cells (16384,1024), (16384,2048), (16384,3600), (16384,4096) plus one labelled downscale cell (8192,2048); a tokens edit without max keeps 16384; no 'or 4096' fallbacks; the proposer menu states stock max 16384 / min 64. r2's grid reruns only the new tokens cells (others from cache); the TS prior is reset and read from r2's stock grid. r1s9 and r1s6 are re-judged as r1s9_ddacd4x / r1s6_790728x: same program, tokens max 16384, min 3600 (disclosed re-read); r1s3 as is",
              samples="unchanged (2 per read, zx kept); owner 11-10: headline reporting is pass@1 (per-sample mean or sample 0), majority vote logged separately, never the headline"),
     grid_reuse="round-1 stock grid from p1109c_grid0 (same tree, fixed ops, stock only, same rows) copied into r001 of the final run; disclosed",
 )
-json.dump(F, open("harness/frozen/prereg_1109c_final.json", "w"), indent=1)
+A11 = F.pop("a11")      # amendment 11 lives beside the anchor (harness/frozen is the run's anchor_sha: never edited after launch)
+json.dump(dict(_doc="amendment 11 of p1109c_final_c (applied between r1 and r2); the anchor harness/frozen stays as launched (d1e4ab7)", **A11), open("c1109deploy/amendment_a11.json", "w"), indent=1)
+if not os.environ.get("KEEP_FROZEN"):
+    json.dump(F, open("harness/frozen/prereg_1109c_final.json", "w"), indent=1)
 p = json.load(open("c1109deploy/prereg_full.json"))
 c = p["c1109"]
 c.update(fired_min=3, s1_net=True, early_a7=True, carry_seed=[], allocator="ts", gate_key="prompts", gate_key_min=20, gate_prompts=GP, gate_control_note=FALLBACK, gate_recite_min=.95, gate_misfire_max=.01,

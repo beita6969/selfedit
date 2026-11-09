@@ -15,6 +15,20 @@ def held_F(fu):
     return G
 
 
+def pool_answers(H, fu, members, votes, held=True):
+    """THE pool answer column per Table row (1109c-final 11-10, one helper for every pool read): with ONE member the pool is that member's own
+    plurality (H.maj_col of its samples) -- the DS-fused column relabels it (r1: pool FIT .660 vs stock .618); else the fused column, FIT rows held
+    out by picture when held (as hboost.pool_cols)."""
+    tab = fu.tab
+    if len(members) == 1:
+        v = votes[members[0]["name"]]
+        a = np.full(len(tab.ids), -1, dtype=int)
+        for i, k in tab.index.items():
+            a[k] = H.maj_col(tab, k, v.get(i))
+        return a
+    return H.answer_of(tab, held_F(fu) if held else fu.F)
+
+
 def rows_of(fu, ids):
     idx = np.array([fu.tab.index[i] for i in ids], int)
     return idx
@@ -31,11 +45,12 @@ def read_R(H, run, members, cand, votes, R_ids, base=None):
     G0, G1 = held_F(f0), held_F(f1)
     y, mk = f0.tab.y[idx], f0.tab.mask[idx]
     ce0, ce1 = row_ce(G0[idx], y, mk), row_ce(G1[idx], y, mk)
-    a0, a1 = H.answer_of(f0.tab, G0)[idx], H.answer_of(f1.tab, G1)[idx]
+    pa = pool_answers(H, f0, members, votes)
+    a0, a1 = pa[idx], pool_answers(H, f1, list(members) + [cand], votes)[idx]
     r0, r1 = (a0 >= 0) & (a0 == y), (a1 >= 0) & (a1 == y)
     return dict(ids=ids, clusters=[str(run.data.cluster(i)) for i in ids], d_ce=ce0 - ce1, d_acc=r1.astype(float) - r0.astype(float),
                 right0=r0, right1=r1, S0=float(r0.mean()) if len(ids) else None, S1=float(r1.mean()) if len(ids) else None,
-                up=int((r1 & ~r0).sum()), down=int((r0 & ~r1).sum()), f0=f0, f1=f1, pa=H.answer_of(f0.tab, G0))
+                up=int((r1 & ~r0).sum()), down=int((r0 & ~r1).sum()), f0=f0, f1=f1, pa=pa)
 
 
 def pool_S(H, run, members, votes, R_ids):
@@ -43,11 +58,7 @@ def pool_S(H, run, members, votes, R_ids):
     fu = run.fz("fuse", run.fuser.fuse, members, votes, run.data, run.fusion)
     ids = [i for i in R_ids if i in fu.tab.index]
     idx = rows_of(fu, ids)
-    if len(members) == 1:             # 1109c audit 11-09: a one-member pool is that member (plurality of its samples), not a refit ds pool that can differ from it
-        v = votes[members[0]["name"]]
-        a = np.array([H.maj_col(fu.tab, fu.tab.index[i], v.get(i)) for i in ids], dtype=int)
-    else:
-        a = H.answer_of(fu.tab, held_F(fu))[idx]
+    a = pool_answers(H, fu, members, votes)[idx]      # 1109c audit 11-09 / 11-10: a one-member pool is that member's plurality
     y = fu.tab.y[idx]
     return ids, ((a >= 0) & (a == y)).astype(float)
 
@@ -82,7 +93,7 @@ def read_lobo(H, run, members, cand, votes, R_ids, cache=None):
         rows = [i for i in ids if bench[i] == b]
         idx = rows_of(g0, rows)
         y = g0.tab.y[idx]
-        a0, a1 = H.answer_of(g0.tab, g0.F)[idx], H.answer_of(g1.tab, g1.F)[idx]
+        a0, a1 = pool_answers(H, g0, members, votes, held=False)[idx], pool_answers(H, g1, list(members) + [cand], votes, held=False)[idx]
         r0, r1 = (a0 >= 0) & (a0 == y), (a1 >= 0) & (a1 == y)
         out[b] = dict(rows=len(rows), inc=float((r1.astype(float) - r0).mean()) if rows else 0.0, up=int((r1 & ~r0).sum()), down=int((r0 & ~r1).sum()))
     return out

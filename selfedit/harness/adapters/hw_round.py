@@ -131,7 +131,9 @@ def plan_ts(R, r, can_cross):
 
 
 def H_grid(R):
-    f = f"{R.work}/r001/grid.json"
+    f = f"{R.work}/r{int(getattr(R, 'cur_round', 1) or 1):03d}/grid.json"      # 1109c-final 11-10: the prior is read from the grid of the round it is (re)set in (r2 after the tokens-cell fix); r001 otherwise
+    if not os.path.exists(f):
+        f = f"{R.work}/r001/grid.json"
     return json.load(open(f)) if os.path.exists(f) else None
 
 
@@ -392,6 +394,11 @@ def request_nulls(R, H, members, top=()):
 
 
 # ------------------------------------------------------------------ stage 1 (A1: fire gate + zx ranking) ----------------------------------------
+def pool_col(R, H, members, votes, fu):
+    """Stage-1 fired / net pool column: pool_score.pool_answers (one member -> its plurality; else the held-out fused column)."""
+    return PS.pool_answers(H, fu, members, votes)
+
+
 def screen_ok(R, fired, fmin, net, zx):
     """Stage-1 screen: fired >= fmin and zx > 0 (1109c audit 11-09); amendment 11 (coordinator 11-10 ~02:05 CST, screen only): also net > 0, with
     fired_min 3 in the prereg. Stage 2 and every admission threshold unchanged."""
@@ -411,7 +418,7 @@ def early_draw(R, H, r, members, m, row, qm):
         return
     votes = R.votes(members + [m])
     fu = R.fz("fuse", R.fuser.fuse, members, votes, R.data, R.fusion)
-    pa, tab = H.pool_cols(fu), fu.tab
+    pa, tab = pool_col(R, H, members, votes, fu), fu.tab
     Q = R.no_id(list(qm(m)), "early A7")
     F = H.fired_rows(tab, votes[m["name"]], pa, Q)
     fmin = min(int(R.c9["fired_min"]), max(1, math.ceil(len(Q) / 2)))
@@ -438,7 +445,7 @@ def early_draw(R, H, r, members, m, row, qm):
 def stage1(R, H, r, rd, members, have, qm):
     votes = R.votes(members + [m for m, _ in have])
     fu = R.fz("fuse", R.fuser.fuse, members, votes, R.data, R.fusion)
-    pa, tab = H.pool_cols(fu), fu.tab
+    pa, tab = pool_col(R, H, members, votes, fu), fu.tab
     rows = []
     for m, row in have:
         Q = R.no_id(list(qm(m)), "stage 1")
@@ -666,7 +673,18 @@ def rejudge(R, H, r, members, by):
     R.no_id(rows, "re-judge")
     out = []
     for n in names:
+        ov = n if isinstance(n, dict) else {}
+        n = ov.get("name", n)
         x = _rebuild(R, H, r, n, hist, by, "re-judge")
+        if x is not None and ov.get("vision"):       # 1109c-final 11-10 (disclosed re-read): the same program with its vision edit's fields overridden (tokens max at stock 16384)
+            m, row = x
+            g = dict(m["genome"], vision=dict(m["genome"]["vision"] or {}, **ov["vision"]))
+            n2 = H.member(g, m.get("program"), origin="proposal")
+            m = dict(m, genome=n2["genome"], mid=n2["mid"], name=f"{n}x")
+            row = dict(row, name=m["name"], rejudge_override=ov["vision"], rejudge_of=n)
+            R.ev.build(m["genome"]); R.ev.wait(R.say)
+            x = (m, row)
+            R.say(f"r{r}: 1109c re-judge {n} as {m['name']} with vision {m['genome']['vision']} (override {ov['vision']})")
         if x is not None:
             x[1]["rejudge_of_round"] = x[1]["round"]
             out.append(x)

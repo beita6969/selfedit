@@ -296,7 +296,7 @@ def op_kernel(p, g):
 
 def op_tokens(p, g):
     v = dict(g["vision"] or {"patch": 16, "kernel": "box", "max": None, "min": None, "merge": 0})
-    v["max"] = ch(p.get("max"), "max", 256, 16384)
+    v["max"] = ch(p.get("max", STOCK_MAX_TOKENS), "max", 256, 16384)      # 1109c-final 11-10: an edit that does not set max keeps the stock max
     v["min"] = ch(p.get("min", 0), "min", 0, v["max"]) or None
     return dict(vision=v), 2
 
@@ -400,7 +400,7 @@ MENU = """Edits you can make to the network, without training. Answer with a JSO
 - gate: {"note": text up to 60 words, "scope": "cat:..."}. Writes the note into the last layer with one repurposed neuron per token, so that the checkpoint recites it when it starts on such a problem. No prompt is added.
 - patch: {"patch": 4|5|8|11, "kernel": "box"|"bilinear"|"bicubic"}. Vision patch size in pixels, now 16 unless the record says otherwise. The new kernel is derived from the old, no training.
 - kernel: {"kernel": ...}. Changes the kernel rule of a patch edit already made.
-- tokens: {"max": 256..16384, "min": 0..max}. Image tokens per image; images outside are resized by the processor.
+- tokens: {"max": 256..16384, "min": 0..max}. Image tokens per image; images outside are resized by the processor. Stock is max 16384, min 64: a max below 16384 downscales every larger image; a min above 64 upscales small ones. A tokens edit without "max" keeps 16384.
 - scale: {"layer": 0..63, "writer": "attn"|"mlp", "alpha": .5..1.5}. Scales one residual writer of a text layer.
 - direction: {"name": one of NAMES, "first": L, "last": L, "writer": "attn"|"mlp", "alpha": -8..8}. Adds or removes a direction in the writers' output over at most 9 layers.
 - verbosity: same fields as direction, for the names that change thinking length (VERB). Graded on accuracy, tokens, truncation and finished accuracy.
@@ -459,7 +459,7 @@ class RandomDriver(Driver):
             p = {"gate": lambda: dict(note=rng.choice(pool), scope=c),
                  "patch": lambda: dict(patch=rng.choice([4, 8, 5, 11]), kernel="bilinear"),
                  "kernel": lambda: dict(kernel=rng.choice(["box", "bilinear", "bicubic"])),
-                 "tokens": lambda: dict(max=rng.choice([1024, 2048, 4096, 8192]), min=rng.choice([0, 1024])),
+                 "tokens": lambda: dict(max=int(rng.choice([8192, STOCK_MAX_TOKENS])), min=int(rng.choice([0, 1024, 3600]))),
                  "scale": lambda: dict(layer=L, writer=rng.choice(list(WRITERS)), alpha=rng.choice([.7, .85, 1.15, 1.3])),
                  "direction": lambda: dict(name=rng.choice(DIRECTIONS), first=L, last=min(63, L + rng.randrange(5)), writer="attn", alpha=rng.choice([-4, -2, -1, 1, 2, 4])),
                  "verbosity": lambda: dict(name=rng.choice(VERBOSE), first=L, last=min(63, L + rng.randrange(5)), writer="attn", alpha=rng.choice([-4, -2, -1, 1, 2, 4])),
@@ -678,7 +678,7 @@ class Lineage:
         m = self.model_path(g)
         if os.path.exists(f"{m}/config.json"):
             return None
-        cmd = f"python -u rsi/vision_patch.py --model {self.a['stock']} --out {m} --patch {v['patch']} --kernel {v['kernel']} --max-tokens {v['max'] or 4096}"
+        cmd = f"python -u rsi/vision_patch.py --model {self.a['stock']} --out {m} --patch {v['patch']} --kernel {v['kernel']} --max-tokens {v['max'] or STOCK_MAX_TOKENS}"
         cmd += f" --min-tokens {v['min']}" if v.get("min") else ""
         cmd += f" --merge {v['merge']}" if v.get("merge") else ""
         self.submit(f"vh_ck_{sha(canon(v))[:10]}", cmd, [f"{m}/config.json"], f"{m}.failed")

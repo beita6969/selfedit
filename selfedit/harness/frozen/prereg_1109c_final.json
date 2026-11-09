@@ -114,13 +114,5 @@
   "one-member pool = that member's plurality answer",
   "line_report skips cancelled asks"
  ],
- "a11": {
-  "when": "between r1 and r2 of p1109c_final_c (coordinator 11-10 ~02:05 CST; driver stopped with gpu stop after r1 closed, resumed from state.json)",
-  "screen": "stage-1 passers: fired >= 3 (fired_min 8 -> 3, scaled min(3, ceil(scope/2))), zx > 0 AND net > 0 on fired rows vs the members' pool; ranked by zx, cap 3. Screen only: stage 2 (A7 member track, Holm over what is read, nulls, tripwire, C2, A8) and every admission threshold unchanged. Reason: r1 had 0 passers while s9 (fired 7, net +3, zx +2.00), s6 (4, +2, +1.34), s3 (6, +3, +0.96) were narrow positive edits blocked by fired_min 8.",
-  "r1_rejudge": "r1s9_ddacd4, r1s6_790728, r1s3_93731d (r1's saved stage-1 table under the new screen, top 3 by zx) go into state c1109_rejudge and are read in r2's stage 2 with r2's Holm family (amendment-2 path: rebuilt from their stored proposals, cached rows not re-asked)",
-  "early_a7": "a candidate passing its own screen during the stage-1 wait gets its A7 paired draw asked at once as a LOW (_se) line through the same evaluate_many request as request_nulls (same member, rows, chunking, out file, line seed), so the later request waits on that same line: answers asked once, identical by construction (tests/t_a11.py); stage 1 does not wait on it",
-  "stay_max": "card code code-xf/rsi/hboost.py STAY_MAX 3600 -> 14400 s (scheduling only; stay_max_4h.sh, commit c7dab7e, applied 2026-11-10 01:58:37 CST, sha d6ed5661 -> 62e037e3)",
-  "samples": "unchanged (2 per read, zx kept); owner 11-10: headline reporting is pass@1 (per-sample mean or sample 0), majority vote logged separately, never the headline"
- },
  "grid_reuse": "round-1 stock grid from p1109c_grid0 (same tree, fixed ops, stock only, same rows) copied into r001 of the final run; disclosed"
 }

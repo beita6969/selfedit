@@ -1,6 +1,6 @@
 # selfedit
 
-This repo holds only the latest code of the current main run, **1109c-final** (`p1109c_final_c`, launched 2026-11-10 CST). Old versions, data, weights, answers and logs are not included. Synced from the working tree at commit `28ff0d7`.
+This repo holds only the latest code of the current main run, **1109c-final** (`p1109c_final_c`, launched 2026-11-10 CST). Old versions, data, weights, answers and logs are not included. Synced from the working tree at commit `4516ca8`.
 
 A Qwen3.8-27B population improves itself, training-free, through several kinds of edits: harness programs, image patch/resolution and image-token edits, verbosity steering, and gated last-layer (L63) weight writes. Accepted members are fused with Dawid-Skene.
 

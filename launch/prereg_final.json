@@ -275,7 +275,7 @@
  "code_shas_1109c": {
   "harness/__init__.py": "813727719328a7065a3741b13af98e7ff4ddf433c28954a2b10fa2e48dad8d60",
   "harness/adapters/__init__.py": "5518e56bbc850526a2575084264b109f3162101bcbe8f4f276c2afa083f24d47",
-  "harness/adapters/hw_round.py": "9d87f67cab16c3b25c47256614d5f54ed5162746c2409417e40761498c6023ac",
+  "harness/adapters/hw_round.py": "b96623d2980fa90491329454831804a38a9cf1f97fbc28e779bc85e448d179a7",
   "harness/adapters/member_cand.py": "d2b7a1e436b48e4d4fb42a095b0e4d0b15dd9234a4554a404ae91a5a630f4a8d",
   "harness/adapters/meta_level.py": "3107eef962464501fd3bb48e1781cad7f022746a7b4af18ea271158b08655942",
   "harness/adapters/pool_score.py": "37672afb9448de33bde0d53122d7321db2bcc2b3704f43344bdec2fde75c3cea",
@@ -294,7 +294,7 @@
   "harness/anchor/selection.py": "5142043947117e3a28167fdbdddf824293e7a79bdb5f7e90a4ebc908bed7d663",
   "harness/anchor/stats.py": "521806ed1507702e7e01fd802e4e432fe56194ca6a644ff9e0a26fcfb3b2cb0b",
   "harness/frozen/prereg_1109c.json": "c21cc2daa947845048a16ed5f13d568ac5cfe77fb2beb2ea7cd70f1f9857fb8c",
-  "harness/frozen/prereg_1109c_final.json": "19ff968bee91cb06e0d159a4c5eae6119f837d091df2b977d162d02ecb66af75",
+  "harness/frozen/prereg_1109c_final.json": "67dfd8f7beee8a4bf1f02da4f510b6770ae7ef65a660c9fb15bd699b9807688c",
   "harness/hw/__init__.py": "c8e4f37f8962f90e1c0cb4d4572ecfd0f1e201177fc340a547ae7713266a7fd2",
   "harness/hw/experience.py": "326959a01c1117903eec4eb6da69a638fc842df752e34ab4593b3d25df014fab",
   "harness/ops/__init__.py": "5ee7ba5cbe6a0c5abb3250f8f902d04bb9156d7d00dc009b84e97b88761a4725",
@@ -325,10 +325,10 @@
   "harness/vendor/skillopt/utils/__init__.py": "7a2f608332c095057fa82173f4841dee1d6f9f7a127b35a4770bf418319bc5f0",
   "harness/vendor/skillopt/utils/json_utils.py": "77d06263ab9dd6537c52c80a7cd4614d2a0362ed933407725a032bb095738589",
   "harness/vendor/skillopt/utils/scoring.py": "f5756974a6d0f62f45bc408cc18ea13376eb1ab6592a351e8722d53860fcb8e9",
-  "rsi/hboost.py": "439a2a07310b36170f5598f454e7e4735bdf59dcfa27b2fceb50011e1a6abdf4",
+  "rsi/hboost.py": "f1deab2b655ebf5b0e0351841d87f34e9fcf22336d98d3d48281f93a79b47ae9",
   "rsi/mm_gate.py": "d7437791438aa35fc3a9bf043e43c5146cbeeabe96d37e06cf908974b7704f2a",
   "rsi/res_fuse.py": "c059d0d561507fce111c22ce1f9fed3decb995712cbf732c1df0131c5c88cc82",
-  "rsi/vharness.py": "45863b527fc3057931545c904c236339405e895c9507e99e1385c39c693f295e"
+  "rsi/vharness.py": "aea226d10aaf71ef54820233eaffc6f697a4b899fc61c7390a67ac7d65afb450"
  },
  "driver_sha": "4689444b5452feaad8972065da4bb0d97d6f90dbbdd2cca6f614d01c65d044bc",
  "rows_note": "owner 11-09 ~16:20 CST row reduction: LEARN 96 rows per bench (show 30 / score 42 / select 24; mk_sub.py seed sub1109); 64 failed T2 (+5 pp power 0.000 Holm x3) and C3 (r5 .055); 96 passed T1 (KS p .54, 0 of 10 at p <= .05), T2 (+5 pp Holm x3 .960) and C3 (max .040); ID 128/bench and ood128_v2 unchanged",
