@@ -1,0 +1,66 @@
+PY operator pilot (selfedit v5, 11-11): the model may run its OWN Python on the question's image(s) during a read.
+
+Code (Mac: ~/selfedit/code-v5/py_op/ ; Vesta: /workspace/fudan/mingdazhang/selfedit-pyop/)
+  sandbox.py     one model-written block -> separate process; static check (ast allowlist) + restricted builtins + OS lock-down
+                 (root: chroot into an empty read-only dir, uid nobody; RLIMIT_NOFILE 3, FSIZE 0, NPROC 0, CORE 0, AS 6 GB, CPU 10 s;
+                 wall-clock kill 20 s); images in / results out through pipes (JSON), nothing on disk
+  t_sandbox.py   32 tests: ordinary image code, every class of refusal, no file write, loops stopped, output cap, memory cap, lock report
+  py_read.py     the read harness: base request (floor 4096, effort medium) + ONE system note; <= K = 2 code rounds; grading; token sums
+  t_py_read.py   end-to-end test against a scripted fake chat server
+  py_table.py    PY reads vs the 8 cached base reads of the same signal rows; equal-token comparison on the base's own vote frontier
+  py_kinds.py    kinds of code, run outcomes, per-category and row-level movement
+  py_export.py   stratified sample of traces (gzip JSONL) for reading; py_show.py prints them
+  base_signal_e8.jsonl.gz   the cached base reads of the 324 signal rows (from ~/selfedit/v5_exports/e8_floor_t001_learn_full.jsonl.gz)
+
+Outputs on Vesta: /data/fd/mingdazhang/selfedit/v5/py_op/<run>/{reads.jsonl (full traces), compact.jsonl, config_*.json (note text)}
+  runs: smoke1 (first note wording), smoke2 (reworded note), full1 (final interface, 324 signal rows x 2 samples)
+  the sandbox's empty directory: /data/fd/mingdazhang/selfedit/v5/py_op/jail_empty (mode r-x, never written, never removed)
+Outputs on the Mac: ~/selfedit/v5_py_op/ (tables, compact reads, trace samples)
+
+Rows: only v4_role show / monitor of the clean learn file (sha256 b1263f83...); JUDGE, ID-test and OOD rows are never read.
+
+Added after the full run
+  py_mix.py      PY reads as one component of mixed votes (base + PY) against the base's vote frontier at equal generated tokens
+  as_run_full1/  sandbox.py and py_read.py exactly as run for full1 (= the copy on Vesta)
+  py_read.py on the Mac carries two changes made AFTER full1 (not in its numbers): an empty <tool_call> stub or empty fence after a complete
+                 block no longer hides the block (6 full1 reads ended that way); PY_THINK_ROOM (default 6000 = as run; 16000 proposed) =
+                 room that must remain before the reasoning of earlier turns is kept in the history (14 full1 reads hit the 46,000 window)
+Results on the Mac (~/selfedit/v5_py_op/): NOTE_full1.txt, full1_table.txt, full1_mix.txt, full1_kinds.txt, full1_rows.tsv,
+  full1_compact.jsonl.gz (648 reads: code, outputs, tokens, grades), full1_traces42.jsonl.gz (42 sampled traces), smoke1_/smoke2_traces.jsonl.gz
+
+JUDGE-row test of the escalation policy (coordinator 11-11 21:20; one candidate, K = 1)
+  py_judge.py    the verdict on stage 3's own path (stage1_data loaders + classify + guess windows, tip frontier with vertex names from signal
+                 rows, judge_v5.Judge.cand_from_views / decide); also the signal-row pre-screen and the guess split (description)
+  py_read.py     now takes --roles judge and --row-ids FILE (default roles stay show,monitor); run judge1 used PY_THINK_ROOM=16000 and the
+                 stub-parser fix; the copy on Vesta for judge1: /workspace/fudan/mingdazhang/selfedit-pyop-judge/
+  ~/selfedit/v5_py_op/judge_rows_nonunanimous.json   the 217 JUDGE rows read (8 cached base reads not unanimous in their answer; picked from predictions only)
+  ~/selfedit/v5_py_op/judge1_compact.jsonl.gz        the 434 PY reads (Vesta: /data/fd/mingdazhang/selfedit/v5/py_op/judge1/)
+  ~/selfedit/v5_py_op/judge1_verdict.txt / .json     the verdict table
+
+Held-out read of the finished system (coordinator 11-11 22:20; REPORTING ONLY)
+  py_heldout.py  the tables (stock / floor / tip: 1 read, 2 reads + third, 2 reads + PY decides; differences with picture-clustered 95 %
+                 intervals; escalations); base lines checked against the Venus numbers
+  py_read.py     --heldout (row files, gold of babyvision/6557 = "="), --cap-file / --max-per-server (cap raised while running), PY_MAXLEN
+                 (window read from the servers: 46,000); as_run_judge1/ = the copy used for judge1; Vesta copy for heldout1:
+                 /workspace/fudan/mingdazhang/selfedit-pyop-heldout/
+  py_judge.py --tip   the same policy on the specialisation system (2 tip reads, PY decides) on JUDGE rows, for the record
+  ~/selfedit/v5_py_op/: heldout_rows_nonunanimous.json (702 rows), heldout1_compact.jsonl.gz (1,404 PY reads), heldout1_table.txt,
+                 heldout1_table_s0.txt, judge_rows_tip_extra.json (24 rows), judge1_compact_all.jsonl.gz (482 reads), judge1_tip_composition.txt
+  Vesta: /data/fd/mingdazhang/selfedit/v5/py_op/heldout1/ and judge1/ (full traces)
+
+PY generation 2: adjudication by measurement (coordinator 11-11 23:32); REJECTED on JUDGE rows, nothing read on held-out
+  py_gen2_tasks.py   deployed replicates (s0,s1) (s2,s3) (s4,s5) (s6,s7) of the cached base reads -> task lists (V1: no hint; PYA: the pair's two answers)
+  py_gen2.py         deployed evaluation; variant vs V1 with judge_v5 (base = V1); escalation-only accuracies; which answer was given
+  py_read.py         --tasks FILE and the one sentence HINT (PYA); --k 4 = PYA4; as_run_heldout1/ = the copy before these additions;
+                     Vesta copy: /workspace/fudan/mingdazhang/selfedit-pyop-gen2/
+  py_gen2_heldout_tasks.py   prepared for step 3, NOT used (PYA was not accepted)
+  ~/selfedit/v5_py_op/: gen2_signal_{v1,pya}.json, gen2_judge_{v1,pya}.json, gen2_judge_v1_s23.json (task lists);
+                     gen2s_{v1,pya,pya4}_compact.jsonl.gz, gen2j_{pya,v1}_compact.jsonl.gz (reads); gen2_signal_table.txt, gen2_judge_verdict.txt
+
+V1 on the weights base VP2M512 (coordinator 11-12 04:27): JUDGE rows, K = 1 -> REJECT narrowly (p_gen .1376); held-out step waits for the coordinator
+  py_read.py         PY_MIN_IMAGE_TOKENS=none (stock requests), PY_MODEL (served model name), PY_SHOWN_TOKENS (client-side count of a show()
+                     image for the fit test); as_run_gen2/ = the copy before these additions; Vesta copy: /workspace/fudan/mingdazhang/selfedit-pyop-vp/
+  py_judge_vp.py     the verdict on judge1's path with the base's own 4-read frontier (signal rows from e11 give the vertex names)
+  py_heldout2.py     held-out tables with several systems side by side (reproduces heldout1_table.txt for floor / tip; --py vp2m512=FILE adds the weights system)
+  ~/selfedit/v5_py_op/: vp_judge_rows_nonunanimous.json (165 rows), vpj1_compact.jsonl.gz (330 PY reads), vp_judge_verdict.txt / .json
+  Vesta: /data/fd/mingdazhang/selfedit/v5/py_op/vpj1/ (full traces)

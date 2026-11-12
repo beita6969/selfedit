@@ -1,0 +1,244 @@
+{
+ "_note": "v4 declared knob menu (A3/AM1). Effort is NOT a knob: medium for every call. One-factor mutations of the tip draw one knob and one value != the tip's. Stage 1 = settings applied per request by the client; Stage 2 adds the weight knobs, read on the W engine (Surgeon apply/revert, vharness ops). Patch size / kernel and v3-trace directions / verbosity are out (coordinator 11-10). Value sets for weight knobs = v3 grid ranges.",
+ "settings": {
+  "min_image_tokens": {
+   "stock": null,
+   "values": [
+    null,
+    1024,
+    2048,
+    4096
+   ],
+   "what": "every image is upscaled to at least this many visual tokens (null = the processor's own minimum)"
+  },
+  "max_image_tokens": {
+   "stock": 16384,
+   "values": [
+    16384,
+    8192,
+    4096,
+    2048
+   ],
+   "what": "larger images are downscaled to at most this many visual tokens"
+  },
+  "temperature": {
+   "stock": 1.0,
+   "values": [
+    0.6,
+    0.8,
+    1.0,
+    1.2
+   ],
+   "what": "sampling temperature of the answer"
+  }
+ },
+ "weights_stage2": {
+  "scale": {
+   "layer": [
+    23,
+    31,
+    39,
+    47,
+    55,
+    59,
+    61,
+    63
+   ],
+   "writer": [
+    "mlp",
+    "attn"
+   ],
+   "alpha": [
+    0.7,
+    0.85,
+    1.15,
+    1.3
+   ],
+   "what": "multiply one block's output projection by alpha"
+  },
+  "skip": {
+   "layer": [
+    55,
+    59,
+    60,
+    61,
+    63
+   ],
+   "writer": [
+    "mlp",
+    "attn"
+   ],
+   "what": "zero one block's output (the residual passes through)"
+  },
+  "attn_temp": {
+   "first": [
+    39,
+    47,
+    55
+   ],
+   "last": [
+    63
+   ],
+   "alpha": [
+    0.8,
+    1.3
+   ],
+   "what": "scale attention logits of layers first..last by 1/alpha"
+  },
+  "vision_scale": {
+   "alpha": [
+    0.9,
+    1.1,
+    1.2
+   ],
+   "what": "scale the vision merger output"
+  }
+ },
+ "weights_band_cells": {
+  "_note": "arm B weight cells on engine W (S2-C moved into generation 4, coordinator 11-10): scalar knobs by layer band, a few values each, in the W worker's edit forms (engine_api.md \u00a77, w_worker.py surgeon_edit; layers [a, b] inclusive). Each cell is one global candidate of author B, drawn blind, at most once per tip; cells found in <root>/cells/*/cells.json join the menu as a second group.",
+  "scale": {
+   "layers": [
+    [
+     24,
+     31
+    ],
+    [
+     32,
+     39
+    ],
+    [
+     40,
+     47
+    ],
+    [
+     48,
+     55
+    ],
+    [
+     56,
+     63
+    ]
+   ],
+   "writer": [
+    "mlp",
+    "attn"
+   ],
+   "alpha": [
+    0.9,
+    1.1
+   ]
+  },
+  "skip": {
+   "layer": [
+    59,
+    61,
+    63
+   ],
+   "writer": [
+    "mlp",
+    "attn"
+   ]
+  },
+  "attn_temp": {
+   "band": [
+    [
+     39,
+     63
+    ],
+    [
+     47,
+     63
+    ],
+    [
+     55,
+     63
+    ]
+   ],
+   "alpha": [
+    0.8,
+    1.25
+   ]
+  },
+  "vision_scale": {
+   "alpha": [
+    0.9,
+    1.1,
+    1.2
+   ]
+  }
+ },
+ "ranges_B": {
+  "_note": "AM16 item 4 (coordinator 11-10): arm B's blind menus as ranges; proposer menus ('settings' above) stay byte-identical. Engine facts: an image token is a 32 x 32 pixel patch (patch 16 x merge 2, engine_v4/common.py FACTOR 32); the processor's own minimum is 65,536 px = 64 tokens and the engine's limit 16,777,216 px = 16,384 tokens (STOCK_MIN_PX / STOCK_MAX_PX); the model has layers 0-63. CHOICES, NOT ENGINE FACTS: the temperature interval and the weight dose interval below (they bracket the earlier value lists: temperature .6-1.2, doses .1-.3).",
+  "settings": {
+   "min_image_tokens": {
+    "pow2": [
+     64,
+     16384
+    ],
+    "null_is": 64,
+    "fact": "engine"
+   },
+   "max_image_tokens": {
+    "pow2": [
+     64,
+     16384
+    ],
+    "null_is": 16384,
+    "fact": "engine"
+   },
+   "temperature": {
+    "interval": [
+     0.5,
+     1.5
+    ],
+    "null_is": 1.0,
+    "fact": "choice"
+   }
+  },
+  "weights": {
+   "layers": [
+    0,
+    63
+   ],
+   "dose": [
+    0.05,
+    0.3
+   ],
+   "ops": [
+    "scale_mlp",
+    "scale_attn",
+    "attn_temp",
+    "vision_scale"
+   ],
+   "fact": "layers: engine; dose interval: choice (alpha = 1 + signed dose, log-uniform |dose|); ops: the W worker's scalar forms with a dose (skip has none)"
+  }
+ },
+ "settings_arm": [
+  {
+   "name": "T06",
+   "settings": {
+    "temperature": 0.6
+   }
+  },
+  {
+   "name": "F2048",
+   "settings": {
+    "min_image_tokens": 2048
+   }
+  },
+  {
+   "name": "F1024",
+   "settings": {
+    "min_image_tokens": 1024
+   }
+  },
+  {
+   "name": "STOCK",
+   "settings": {
+    "min_image_tokens": null
+   },
+   "view_only": true
+  }
+ ],
+ "settings_arm_note": "v5 stage 3 (coordinator 11-11): one request-level knob changed per cell; STOCK (no image floor) is a cached VIEW for view-diverse votes only, not a settings candidate (the floor was accepted against it). The reasoning effort is never a knob."
+}

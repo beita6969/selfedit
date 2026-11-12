@@ -1,0 +1,1 @@
+Before finalizing, verify your stated rule against every figure or element in the question. Test at least two candidate rules and eliminate any that fail on even one figure. Count small visual elements (dots, enclosed regions, shaded cells) one at a time to avoid miscounts.
